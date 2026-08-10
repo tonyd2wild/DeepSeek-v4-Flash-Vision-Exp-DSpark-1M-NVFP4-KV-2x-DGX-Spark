@@ -402,45 +402,6 @@ scripts/capture_runtime.sh runtime-before-change
 scripts/capture_runtime.sh runtime-after-change
 ```
 
-## ⚠️ On `nvfp4_ds_mla` — read this before quoting the KV numbers
-
-**On DeepSeek V4, `nvfp4_ds_mla` and `fp8_ds_mla` currently allocate the identical KV envelope.**
-Verified by reading the runtime in this recipe's own image:
-
-```python
-# vllm/models/deepseek_v4/nvidia/flashmla.py:106
-if cache_dtype_str == "nvfp4_ds_mla":
-    # Stage C: DeepSeek V4 padded NVFP4 probe. Match the fp8_ds_mla
-    # envelope first; if this boots, kernel/store correctness is next.
-    return (num_blocks, block_size, 584)
-if cache_dtype_str == "fp8_ds_mla":
-    return (num_blocks, block_size, 584)
-
-# vllm/v1/kv_cache_interface.py:357  (real_page_size_bytes)
-if self.cache_dtype_str == "nvfp4_ds_mla":
-    if self.model_version == "deepseek_v4":
-        return self.storage_block_size * 584     # same as fp8
-    return self.storage_block_size * 416         # the real NVFP4 path — V3.2 only
-```
-
-Both are **584 bytes per token** on V4. The genuine 416-byte NVFP4 layout exists but only applies
-to V3.2. The server says so itself at boot: `Using probe DeepSeek V4 nvfp4_ds_mla KV cache format.`
-
-What this means in practice:
-
-- **The KV-pool figures in this repo are fp8-sized budgets.** Selecting `nvfp4_ds_mla` on V4 does
-  not buy extra context over `fp8_ds_mla`; the two are the same allocation.
-- It explains why every `fp8_ds_mla` vs `nvfp4_ds_mla` A/B in this repo measured identically on
-  throughput and draft acceptance — they are the same code path on this model.
-- **The repo name overstates this.** It predates the V4 port, when the 416-byte path was live.
-
-What has *not* been established: whether the CuTeDSL attention kernels perform genuine 4-bit
-compute inside that envelope. We only audited the allocation and page-size path, not the kernels.
-So treat this as "the pool is fp8-sized" — not as "NVFP4 does nothing."
-
-Tracking this properly rather than quietly editing the numbers. If you have been sizing context
-budgets off the NVFP4 claim, size them off the `fp8_ds_mla` figures instead.
-
 ## Reasoning / thinking mode
 
 Reasoning is **off by default** in this recipe (`--default-chat-template-kwargs '{"thinking":false}'`).
