@@ -386,6 +386,51 @@ scripts/capture_runtime.sh runtime-before-change
 scripts/capture_runtime.sh runtime-after-change
 ```
 
+## Reasoning / thinking mode
+
+Reasoning is **off by default** in this recipe (`--default-chat-template-kwargs '{"thinking":false}'`).
+Everything below was measured on this stack; several of these have cost people real time.
+
+**The response field is `reasoning`, not `reasoning_content`.**
+Non-streaming: `choices[0].message.reasoning`. Streaming: `choices[0].delta.reasoning`.
+There is **no** `reasoning_content` key in a response on this runtime — it is deprecated and only
+accepted on *input*. Clients reading `reasoning_content` see empty and conclude reasoning
+extraction is broken. Credit @vinicius-symetrix (PR #13) for independently reporting the
+streaming half of this.
+
+**`<think>` is written into the prompt, not generated.**
+
+```
+thinking off →  ...<｜Assistant｜></think>
+thinking on  →  ...<｜Assistant｜><think>
+```
+
+So in thinking mode the model's output *starts* with reasoning text and ends with `</think>`;
+there is no opening tag in the completion. **A missing `<think>` in the output is correct
+behaviour.** If you see `</think>` inside `content`, your server is missing
+`--reasoning-parser deepseek_v4` and `--reasoning-config`.
+
+**Enabling it.** Per request: `chat_template_kwargs: {"thinking": true}`, or a top-level
+`reasoning_effort` of `low`/`high`/`max`. Server-wide:
+`--default-chat-template-kwargs '{"thinking":true}'`.
+
+**Never send `reasoning_effort: "none"` together with `thinking: true`.** `"none"` forces
+chat-mode formatting while the reasoning parser stays armed for thinking; with no `</think>`
+in the output the parser puts the *entire* response into `reasoning` and returns
+`content: null`. Measured 4/4 — real `completion_tokens`, `finish_reason: stop`, empty content.
+`reasoning_effort` on its own is fine.
+
+**`reasoning_effort: "low"` behaves as `"high"` on the stock build** — only `"max"`/`"xhigh"`
+differ. See PR #17.
+
+**With `--tokenizer-mode deepseek_v4`, a `chat_template.jinja` in the model directory is
+ignored** — prompt formatting comes from the checkpoint's built-in encoder, not a Jinja
+template. This is why the HuggingFace discussion #26 workaround has no effect here.
+
+**Thinking mode needs output budget.** Reasoning consumes `max_tokens` before any content is
+produced, so a small cap yields `finish_reason: length` with empty `content`. If you benchmark
+thinking mode at a low cap you will measure truncation, not the model.
+
 ## Benchmarks
 
 ### 2026-07-29 full re-characterisation (authoritative — start here)

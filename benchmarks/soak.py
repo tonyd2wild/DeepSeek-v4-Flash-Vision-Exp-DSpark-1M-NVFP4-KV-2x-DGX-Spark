@@ -92,8 +92,12 @@ def worker(wid):
             dt = time.time() - t0
             msg = r["choices"][0]["message"]
             text = (msg.get("content") or "")
-            if msg.get("reasoning_content"):
-                text += msg["reasoning_content"]
+            # This runtime returns reasoning in `reasoning`; `reasoning_content` is
+            # deprecated and only accepted on input. Reading only the old name makes
+            # every thinking-mode response look empty. Keep the fallback for other runtimes.
+            reasoning = msg.get("reasoning") or msg.get("reasoning_content")
+            if reasoning:
+                text += reasoning
             if msg.get("tool_calls"):
                 text += json.dumps(msg["tool_calls"])
             ntok = r["usage"]["completion_tokens"]

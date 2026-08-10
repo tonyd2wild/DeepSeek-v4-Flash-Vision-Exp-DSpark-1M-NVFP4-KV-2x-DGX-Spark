@@ -131,7 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                             ch = j.get("choices", [{}])[0]
                             delta = ch.get("delta") or {}
                             collected += (delta.get("content") or "")
-                            collected += (delta.get("reasoning_content") or "")
+                            collected += (delta.get("reasoning") or delta.get("reasoning_content") or "")
                         except Exception:
                             pass
             self.wfile.write(b"0\r\n\r\n")
@@ -145,8 +145,9 @@ class Handler(BaseHTTPRequestHandler):
                 ch = j.get("choices", [{}])[0]
                 msg = ch.get("message") or {}
                 collected = (msg.get("content") or "")
-                if msg.get("reasoning_content"):
-                    collected += msg["reasoning_content"]
+                reasoning = msg.get("reasoning") or msg.get("reasoning_content")
+                if reasoning:
+                    collected += reasoning
                 if msg.get("tool_calls"):
                     collected += json.dumps(msg["tool_calls"])
                 n_out = (j.get("usage") or {}).get("completion_tokens", 0)
