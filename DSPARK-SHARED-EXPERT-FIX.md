@@ -231,8 +231,10 @@ Two things previously documented here were wrong, and are fixed in this revision
 
 2. **The divisibility rule was stated imprecisely.** The guard only fires when
    `k > n_predict`, which is why `k=3` and `k=4` boot fine. The accurate rule is: **`k ≤ 5`, or a
-   multiple of 5.** Note upstream vLLM uses a `>=` check for DSpark instead, so upstream permits
-   `k=7` at config time — and then hits the same tensor-shape crash.
+   multiple of 5.** Upstream 0.25.2 uses the **same** `>` check, but resolves `n_predict` to
+   `num_nextn_predict_layers` (1 for this checkpoint) rather than `dspark_block_size`, so the
+   guard never fires there; and its DSpark speculator sizes the draft block from `k`, so no shape
+   mismatch follows. See issue #22.
 
 Where k=7 *does* work is on drafters whose draft block is at least 7 — e.g. MiMo-V2.5 DFlash
 (`block_size` = 8, run here at `num_speculative_tokens: 7`), GLM-5.2's DSpark speculator

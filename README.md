@@ -99,13 +99,29 @@ therefore measures **steps/s, not tokens/s**, and under-reports by the acceptanc
 vs 60.1 tok/s on the identical request. Read `usage.completion_tokens`, or divide server-side
 `vllm:generation_tokens_total` by wall time.
 
-**`k` is still 5.** `dspark_block_size = 5` in the 0731 checkpoint exactly as in the preview.
-DeepSeek's 0731 model card recommends `num_speculative_tokens: 7`; that does not work here. The
-boot-time divisibility guard can be patched out, but the run then fails on first generation
-because the drafter emits exactly `dspark_block_size` tokens per pass and multi-block drafting is
-not implemented — the same reason `k=10` boots and then crashes. `k=7` is fine on drafters that
-are natively deeper (MiMo-V2.5 DFlash, GLM-5.2's DSpark speculator, Inkling); DeepSeek-V4-Flash is
-not one of them.
+**`k` is still 5 on this runtime — and that is a property of the runtime, not the checkpoint.**
+`dspark_block_size = 5` in the 0731 checkpoint exactly as in the preview, and DeepSeek's model
+card recommends `num_speculative_tokens: 7`.
+
+On **this recipe's image** (vLLM `0.21.1rc1.dev339+g1967a5627bc3` + B12X), k=7 does not work.
+`SpeculativeConfig.hf_config_override` has a DSpark branch that sets `n_predict =
+dspark_block_size = 5`, so the divisibility guard rejects it at boot. Patch that guard out and the
+run crashes on the first generation with `The size of tensor a (7) must match the size of tensor b
+(5)` — the draft model hardcodes its block width to `dspark_block_size`, so `propose()` returns 5
+columns however large `k` is. `k=10` fails the same way. The accurate rule **on this image** is
+`k <= 5`, or a multiple of 5.
+
+On the **anemll 0.25.2 lineage** (`ghcr.io/anemll/dspark-vllm-gx10:0.1.1`, vLLM
+`0.25.2.dev0+g752a3a504`) neither failure occurs. That build has no DSpark branch in
+`hf_config_override`, so `n_predict` resolves to `num_nextn_predict_layers` = **1** and the guard
+is inert; and its `DSparkSpeculator` sizes the draft block from `num_speculative_tokens` rather
+than `dspark_block_size`, so a 7-wide draft is simply a wider single block. k=7 boots and
+generates there — confirmed by @robotnurse in #22 with per-position acceptance for positions 0-6.
+Corollary on that image: omit `num_speculative_tokens` and you get k=1, not k=5.
+
+Deeper drafts are still not the missing speed on either runtime: positions 4-5 accept at
+0.078/0.047 on hard content here, and #22 measured k=5 → k=7 buying +3.3% tokens/step for a 33%
+wider verify batch.
 
 ### Ruled out by measurement, so you don't repeat it
 
@@ -385,6 +401,45 @@ Capture runtime evidence before and after any fix:
 scripts/capture_runtime.sh runtime-before-change
 scripts/capture_runtime.sh runtime-after-change
 ```
+
+## ⚠️ On `nvfp4_ds_mla` — read this before quoting the KV numbers
+
+**On DeepSeek V4, `nvfp4_ds_mla` and `fp8_ds_mla` currently allocate the identical KV envelope.**
+Verified by reading the runtime in this recipe's own image:
+
+```python
+# vllm/models/deepseek_v4/nvidia/flashmla.py:106
+if cache_dtype_str == "nvfp4_ds_mla":
+    # Stage C: DeepSeek V4 padded NVFP4 probe. Match the fp8_ds_mla
+    # envelope first; if this boots, kernel/store correctness is next.
+    return (num_blocks, block_size, 584)
+if cache_dtype_str == "fp8_ds_mla":
+    return (num_blocks, block_size, 584)
+
+# vllm/v1/kv_cache_interface.py:357  (real_page_size_bytes)
+if self.cache_dtype_str == "nvfp4_ds_mla":
+    if self.model_version == "deepseek_v4":
+        return self.storage_block_size * 584     # same as fp8
+    return self.storage_block_size * 416         # the real NVFP4 path — V3.2 only
+```
+
+Both are **584 bytes per token** on V4. The genuine 416-byte NVFP4 layout exists but only applies
+to V3.2. The server says so itself at boot: `Using probe DeepSeek V4 nvfp4_ds_mla KV cache format.`
+
+What this means in practice:
+
+- **The KV-pool figures in this repo are fp8-sized budgets.** Selecting `nvfp4_ds_mla` on V4 does
+  not buy extra context over `fp8_ds_mla`; the two are the same allocation.
+- It explains why every `fp8_ds_mla` vs `nvfp4_ds_mla` A/B in this repo measured identically on
+  throughput and draft acceptance — they are the same code path on this model.
+- **The repo name overstates this.** It predates the V4 port, when the 416-byte path was live.
+
+What has *not* been established: whether the CuTeDSL attention kernels perform genuine 4-bit
+compute inside that envelope. We only audited the allocation and page-size path, not the kernels.
+So treat this as "the pool is fp8-sized" — not as "NVFP4 does nothing."
+
+Tracking this properly rather than quietly editing the numbers. If you have been sizing context
+budgets off the NVFP4 claim, size them off the `fp8_ds_mla` figures instead.
 
 ## Reasoning / thinking mode
 
