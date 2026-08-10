@@ -84,11 +84,6 @@ services:
       MASTER_PORT: "${MASTER_PORT:-25000}"
       MTP_NUM_TOKENS: "${MTP_NUM_TOKENS:-5}"
 
-      # Server-side chat-template defaults. Optional; empty keeps the historical
-      # '{"thinking":false}'. This is what makes the restored three-level
-      # reasoning_effort reachable from configuration instead of per request.
-      DEFAULT_CHAT_TEMPLATE_KWARGS: "${DEFAULT_CHAT_TEMPLATE_KWARGS:-}"
-
     command:
       - bash
       - -lc
@@ -99,9 +94,6 @@ services:
         export CUDAToolkit_ROOT="$${CUDAToolkit_ROOT:-$${CUDA_HOME}}";
         export LD_LIBRARY_PATH="/opt/env/lib:/opt/env/targets/sbsa-linux/lib:$${LD_LIBRARY_PATH:-}";
         SPECULATIVE_CONFIG="{\"method\":\"dspark\",\"num_speculative_tokens\":${MTP_NUM_TOKENS:-5},\"draft_sample_method\":\"probabilistic\"}";
-        CHAT_TEMPLATE_KWARGS="$${DEFAULT_CHAT_TEMPLATE_KWARGS:-}";
-        [ -n "$${CHAT_TEMPLATE_KWARGS}" ] || CHAT_TEMPLATE_KWARGS='{"thinking":false}';
-        echo "serving with chat-template-kwargs=$${CHAT_TEMPLATE_KWARGS}";
         exec /opt/env/bin/vllm serve ${DSPARK_MODEL:-deepseek-ai/DeepSeek-V4-Flash-DSpark}
         --served-model-name ${SERVED_MODEL_NAME:-deepseek-v4-flash-dspark}
         --host ${VLLM_HOST:-127.0.0.1}
@@ -126,7 +118,7 @@ services:
         --enable-auto-tool-choice
         --reasoning-parser deepseek_v4
         --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
-        --default-chat-template-kwargs "$${CHAT_TEMPLATE_KWARGS}"
+        --default-chat-template-kwargs '{"thinking":false}'
         --generation-config vllm
         --enable-flashinfer-autotune
         --nnodes 2

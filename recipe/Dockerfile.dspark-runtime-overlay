@@ -25,13 +25,6 @@ COPY vllm/v1/attention/backends/mla/b12x_mla_sparse.py /opt/env/lib/python3.12/s
 COPY vllm/v1/spec_decode/dspark.py /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py
 COPY vllm/v1/spec_decode/dspark_proposer.py /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py
 COPY vllm/v1/worker/gpu_model_runner.py /opt/env/lib/python3.12/site-packages/vllm/v1/worker/gpu_model_runner.py
-# reasoning_effort three-level fix: the stock build shipped a single constant named
-# REASONING_EFFORT_MAX that is byte-identical to upstream's *high* text, and a
-# normaliser that mapped everything except max/xhigh to "high". Net effect: "high"
-# injected nothing, "low" did not exist, and upstream's real "max" was unreachable.
-# These two files restore the three levels using DeepSeek's own strings.
-COPY vllm/tokenizers/deepseek_v4.py /opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py
-COPY vllm/tokenizers/deepseek_v4_encoding.py /opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py
 # Streaming tool-parser fix: the stock parser passes an explicit empty
 # `tool_calls=[]` on every content delta once a request carries tools. With
 # exclude_unset=True serialisation that emits `"tool_calls": []`, which is not
@@ -54,6 +47,48 @@ RUN /opt/env/bin/python -m py_compile \
     /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py \
     /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark_proposer.py \
     /opt/env/lib/python3.12/site-packages/vllm/v1/worker/gpu_model_runner.py \
-    /opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4.py \
-    /opt/env/lib/python3.12/site-packages/vllm/tokenizers/deepseek_v4_encoding.py \
     /opt/env/lib/python3.12/site-packages/vllm/tool_parsers/deepseekv32_tool_parser.py
+
+# py_compile only validates syntax. A file that compiles but fails to import --
+# a renamed symbol, a moved module, a bad relative import -- produces a green
+# build and a server that dies at startup, which is the expensive failure mode
+# because it only shows up after the weights have loaded. Import the overlaid
+# modules and assert the entry points still resolve.
+RUN /opt/env/bin/python - <<'PY'
+import importlib
+import sys
+
+# (module, attribute that must exist after the overlay)
+CHECKS = [
+    ("vllm.tool_parsers.deepseekv32_tool_parser", "DeepSeekV32ToolParser"),
+    ("vllm.tool_parsers.deepseekv4_tool_parser", "DeepSeekV4ToolParser"),
+]
+
+failed = False
+for module_name, attr in CHECKS:
+    try:
+        module = importlib.import_module(module_name)
+    except Exception as exc:  # noqa: BLE001 - we want the build to report anything
+        print(f"FAIL import {module_name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+        failed = True
+        continue
+    if not hasattr(module, attr):
+        print(f"FAIL {module_name} has no {attr}", file=sys.stderr)
+        failed = True
+        continue
+    print(f"ok {module_name}.{attr}")
+
+# The V4 parser must remain a subclass of the patched V3.2 base, otherwise the
+# fix silently stops reaching the parser this deployment actually serves with.
+from vllm.tool_parsers.deepseekv32_tool_parser import DeepSeekV32ToolParser
+from vllm.tool_parsers.deepseekv4_tool_parser import DeepSeekV4ToolParser
+
+if not issubclass(DeepSeekV4ToolParser, DeepSeekV32ToolParser):
+    print("FAIL DeepSeekV4ToolParser no longer subclasses DeepSeekV32ToolParser",
+          file=sys.stderr)
+    failed = True
+else:
+    print("ok DeepSeekV4ToolParser subclasses DeepSeekV32ToolParser")
+
+sys.exit(1 if failed else 0)
+PY
