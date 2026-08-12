@@ -1,0 +1,196 @@
+name: Publish runtime image to GHCR
+
+# Publishes the exact vLLM runtime this repo's benchmarks are measured on, so
+# the numbers here point at a pullable image instead of "build it yourself".
+#
+# WHY THIS NEEDS A SELF-HOSTED RUNNER
+# -----------------------------------
+# The image is arm64/GB10 only (sm_121, TORCH_CUDA_ARCH_LIST=12.1a) and roughly
+# 19 GB. GitHub's hosted runners are x86-64, so they cannot build it, and QEMU
+# emulation of a CUDA toolchain build is not a realistic path. The build must
+# therefore happen on a DGX Spark behind a self-hosted runner labelled
+# `[self-hosted, linux, ARM64, dgx-spark]`.
+#
+# The runner also needs the local base image `vllm-dspark-runtime:mia-raf-pr1`
+# already present in its Docker daemon: build-dspark-vllm-runtime.sh starts from
+# it and it is not published anywhere. `verify-base` below fails fast with that
+# message rather than letting the build die 20 minutes in.
+#
+# AUTH
+# ----
+# No PAT and no `write:packages` on any personal account. `permissions.packages:
+# write` grants the automatic GITHUB_TOKEN exactly the scope needed to push to
+# ghcr.io/<owner>/<package>. That is the whole credential story; earlier claims
+# in issue #12 that this was blocked on a token were wrong.
+#
+# TRIGGERS
+# --------
+#   release: published   — the normal path; the release tag names the image tag
+#   push: tags 'v*'      — same thing without a release object
+#   workflow_dispatch    — manual, with an explicit tag, for re-publishing
+#
+# TAGS PUSHED
+#   ghcr.io/<owner>/vllm-dspark-runtime:<version>          (e.g. v2026.08.12)
+#   ghcr.io/<owner>/vllm-dspark-runtime:sha-<short-sha>    (immutable coordinate)
+#   ghcr.io/<owner>/vllm-dspark-runtime:latest             (unless prerelease)
+#
+# The sha- tag is the one to cite in benchmark docs: a version tag can be moved,
+# a commit cannot.
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to publish (e.g. v2026.08.12)'
+        required: true
+        type: string
+      publish_latest:
+        description: 'Also move the :latest tag'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-ghcr
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: vllm-dspark-runtime
+  # Local build tags produced by build-dspark-vllm-runtime.sh.
+  DSPARK_BASE_IMAGE: vllm-dspark-runtime:mia-raf-pr1
+  DSPARK_VLLM_IMAGE: vllm-dspark-runtime:dspark-nvfp4-stage-c
+
+jobs:
+  publish:
+    # The Spark that carries the arm64 base image. Register it with:
+    #   ./config.sh --labels self-hosted,linux,ARM64,dgx-spark
+    runs-on: [self-hosted, linux, ARM64, dgx-spark]
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out the recipe
+        uses: actions/checkout@v4
+
+      - name: Resolve the version tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version='${{ inputs.image_tag }}'
+            latest='${{ inputs.publish_latest }}'
+          else
+            version="${GITHUB_REF_NAME}"
+            latest=true
+            if [ "${{ github.event_name }}" = "release" ] && \
+               [ "${{ github.event.release.prerelease }}" = "true" ]; then
+              latest=false
+            fi
+          fi
+          case "$version" in
+            ''|*' '*|*'/'*) echo "::error::refusing to publish tag '$version'"; exit 1 ;;
+          esac
+          # GHCR paths must be lower-case; the owner may not be.
+          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "version=$version"                                   >> "$GITHUB_OUTPUT"
+          echo "latest=$latest"                                     >> "$GITHUB_OUTPUT"
+          echo "repo=${REGISTRY}/${owner}/${IMAGE_NAME}"            >> "$GITHUB_OUTPUT"
+          echo "sha_tag=sha-$(git rev-parse --short=12 HEAD)"       >> "$GITHUB_OUTPUT"
+
+      - name: Verify the local base image is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! docker image inspect "$DSPARK_BASE_IMAGE" >/dev/null 2>&1; then
+            echo "::error::base image '$DSPARK_BASE_IMAGE' is not in this runner's"
+            echo "::error::Docker daemon. It is a local image and is not published"
+            echo "::error::anywhere, so this workflow cannot fetch it. Load it on the"
+            echo "::error::runner first, then re-run."
+            exit 1
+          fi
+          docker image inspect "$DSPARK_BASE_IMAGE" \
+            --format 'base image ok: {{.Id}} {{.Architecture}} {{.Os}}'
+
+      - name: Build the runtime (bash, same script humans run)
+        shell: bash
+        env:
+          # Never let the build script rsync/ssh to the peer node from CI.
+          WORKER_BUILD: '0'
+          # Ignore any .env.dspark that happens to sit on the runner.
+          ENV_FILE: /dev/null
+        run: ./build-dspark-vllm-runtime.sh
+
+      - name: Verify the built image before pushing anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="$(docker image inspect "$DSPARK_VLLM_IMAGE" --format '{{.Architecture}}')"
+          [ "$arch" = "arm64" ] || { echo "::error::built $arch, expected arm64"; exit 1; }
+          # Patch 3 and Patch 4 are the two fixes whose absence is invisible until
+          # production (cold-prefill garble; half-speed drafting). Fail closed.
+          docker run --rm --entrypoint bash "$DSPARK_VLLM_IMAGE" -c '
+            set -e
+            R=/opt/env/lib/python3.12/site-packages/vllm
+            grep -q is_prefill_chunk "$R/v1/core/sched/scheduler.py" \
+              || { echo "FATAL: Patch 3 missing"; exit 1; }
+            grep -q shared_experts.gate_up_proj "$R/v1/spec_decode/dspark.py" \
+              || { echo "FATAL: Patch 4 missing"; exit 1; }
+            /opt/env/bin/python -c "import vllm; print(\"vllm\", vllm.__version__)"
+          '
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push
+        shell: bash
+        env:
+          REPO: ${{ steps.meta.outputs.repo }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+          PUSH_LATEST: ${{ steps.meta.outputs.latest }}
+        run: |
+          set -euo pipefail
+          for t in "$VERSION" "$SHA_TAG"; do
+            docker tag "$DSPARK_VLLM_IMAGE" "$REPO:$t"
+            docker push "$REPO:$t"
+          done
+          if [ "$PUSH_LATEST" = "true" ]; then
+            docker tag "$DSPARK_VLLM_IMAGE" "$REPO:latest"
+            docker push "$REPO:latest"
+          fi
+
+      - name: Summary
+        shell: bash
+        env:
+          REPO: ${{ steps.meta.outputs.repo }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo '```'
+            echo "docker pull $REPO:$VERSION"
+            echo "docker pull $REPO:$SHA_TAG"
+            echo '```'
+            echo
+            echo "Set \`DSPARK_VLLM_IMAGE=$REPO:$VERSION\` in \`.env.dspark\`."
+            echo
+            echo "New packages are **private by default**. Make it public once, at"
+            echo "Packages -> $IMAGE_NAME -> Package settings -> Change visibility,"
+            echo "or anonymous \`docker pull\` will 401."
+          } >> "$GITHUB_STEP_SUMMARY"
