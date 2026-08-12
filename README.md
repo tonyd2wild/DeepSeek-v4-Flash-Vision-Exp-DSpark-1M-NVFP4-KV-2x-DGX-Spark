@@ -491,12 +491,40 @@ in the output the parser puts the *entire* response into `reasoning` and returns
 `content: null`. Measured 4/4 — real `completion_tokens`, `finish_reason: stop`, empty content.
 `reasoning_effort` on its own is fine.
 
-**`reasoning_effort: "low"` behaves as `"high"` on the stock build** — only `"max"`/`"xhigh"`
-differ. See PR #17.
+**`reasoning_effort: "low"`, `"medium"` and `"high"` all produce *no* effort prefix.** They
+normalise to an internal `"high"` that has no injection branch, so nothing is added to the
+prompt. Only `"max"`/`"xhigh"` inject — and what they inject is the model's **high** text
+(79 tokens), not its `max` text (96). **The model's `max` effort is unreachable on this
+tokenizer mode**, and anyone selecting `"high"` here is running at the vendor's *low*.
+
+An earlier revision of this section said `"low"` behaves as `"high"`. That was true of the
+runtime's internal variable and **inverted as advice** — corrected after @Capicua25x measured
+it (issue #25). Verify in three requests; `prompt_tokens` is the whole witness:
+
+```bash
+for E in low high max; do
+  printf '%-5s ' "$E"
+  curl -s http://127.0.0.1:8888/v1/chat/completions -H 'Content-Type: application/json' \
+    -d "{\"model\":\"deepseek-v4-flash-dspark\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],
+         \"max_tokens\":1,\"reasoning_effort\":\"$E\"}" \
+  | python3 -c 'import json,sys; print("prompt_tokens =", json.load(sys.stdin)["usage"]["prompt_tokens"])'
+done
+# this stack:  low 5 | high 5 (identical — no prefix) | max 84 (+79)
+# api.deepseek.com, same messages: low 681 | high 760 (+79) | max 773
+```
+
+PR #24 vendors the checkpoint's own three-level table and restores the distinction. **Note the
+behaviour change when it lands:** `reasoning_effort:"max"` will then inject DeepSeek's real max
+text instead of its high text, so existing callers of `"max"` get a materially stronger
+instruction. `"low"` and omitted stay byte-identical.
 
 **With `--tokenizer-mode deepseek_v4`, a `chat_template.jinja` in the model directory is
 ignored** — prompt formatting comes from the checkpoint's built-in encoder, not a Jinja
-template. This is why the HuggingFace discussion #26 workaround has no effect here.
+template. This is why the HuggingFace discussion #26 workaround has no effect here. It is
+stronger than that: **explicitly passing `--chat-template /path/to/chat_template.jinja` is also
+ignored** — it shows up in the engine's `non-default args` and changes nothing (measured in
+#25). There is no way to reach the template's three-way effort split without leaving
+`tokenizer_mode=deepseek_v4`, which this recipe needs for DSpark.
 
 **Thinking mode needs output budget.** Reasoning consumes `max_tokens` before any content is
 produced, so a small cap yields `finish_reason: length` with empty `content`. If you benchmark
@@ -1101,6 +1129,67 @@ Check ownership before blaming the recipe:
 ls -ld "${HF_CACHE:-$HOME/.cache/huggingface}"
 ```
 
+### Empty `content` with real `completion_tokens` — classify before you report
+
+A bare "null-content rate" now aggregates at least five unrelated causes, and they want
+different fixes. Two fields settle which one you have. Do this before opening an issue or
+quoting a rate:
+
+| `finish_reason` | `</think>` in the raw output | what it is |
+| --- | --- | --- |
+| `stop` | no | a **client stop string fired inside reasoning** — the CoT restated it, generation was decapitated before `</think>`. lm-eval sends `stop[:4]` on every request. Fix: PR #21's reasoning-aware stop guard, or `until: []` client-side. |
+| `length` | no | **budget exceeded**, not a hang. Reasoning is heavy-tailed even on trivial prompts (48–440 tokens measured on `"What's 1 + 1?"`). Raise `max_tokens` and re-measure; if the rate moves with the budget it was never a non-termination. |
+| `length` | no, *and* the rate does not move with budget | **genuine non-termination** — a repetition loop. Detector that works: 3 consecutive 4,000-char windows below 2% novel word-8-grams. Block-level uniqueness reads *high* on plainly looping text; do not use it. Tracked in issue #18 (B). Sampling at the checkpoint's specified `temperature 1.0` measured 18/18 terminating vs 14/36 at 0.6. |
+| `stop` | n/a | you sent **`reasoning_effort:"none"` with `thinking:true`** — chat-mode prompt, thinking-armed parser. See above in *Reasoning / thinking mode*. |
+| `stop` | yes, and the answer is missing at the client only | the client is reading **`reasoning_content`**; the response key is **`reasoning`**. |
+
+A sixth, rarer one: the model occasionally emits a pseudo-tag scaffold
+(`<STORE_AND_RETURN> 570 </STORE_AND_RETURN>`, `<STDERR> final</STDERR>630`) as its *entire*
+output and never closes `</think>`, so the parser files everything as reasoning. Measured
+5/60 → 0/60 with a marker-specific fallback, ~0.8% residual on a different tag; tag-matching is
+whack-a-mole, so this is documented rather than patched. Non-streaming only in the reported
+measurements. Credit @robotnurse (issue #6).
+
+Classifying costs nothing and it is what made issue #18 tractable.
+
+### Sharing the HF cache over NFS between the nodes — seven JIT caches, three failures
+
+**Symptom.** Any of, usually in this order as you fix each one:
+
+* `torch.compile` dies at startup with a `FileExistsError` / `makedirs` race
+* DeepGEMM asserts `runtime != nullptr` — stale or half-written cubins read over NFS
+* the head's first engine attempt dies every boot on an **ABI-mismatched FlashInfer
+  `sampling.so`**, compiled by one node and silently loaded by the other. Silent because this
+  stack runs `FLASHINFER_DISABLE_VERSION_CHECK=1`. With the worker entrypoint not retrying
+  after a process death, this also orphans the worker on each boot.
+
+None of those messages mention the cache. They read like broken kernels or a broken build.
+
+**Cause.** Downloading the 167 GB checkpoint once and serving it to both nodes over NFS is the
+obvious move — but seven JIT/workspace caches default to (or historically sat under) the same
+tree, and then **both ranks JIT into the same directories concurrently**.
+
+**Fix.** `docker-compose.dspark.yml` now mounts a **separate, node-local** volume at
+`/vllm-cache` and points all seven at it, independent of where `HF_CACHE` lives:
+
+| variable | value |
+| --- | --- |
+| `VLLM_CACHE_ROOT` | `/vllm-cache` |
+| `DG_JIT_CACHE_DIR` | `/vllm-cache/deepgemm-cache` |
+| `FLASHINFER_WORKSPACE_BASE` | `/vllm-cache/flashinfer` |
+| `TILELANG_CACHE_DIR` | `/vllm-cache/tilelang` |
+| `TORCHINDUCTOR_CACHE_DIR` | `/vllm-cache/torchinductor-cache` |
+| `TRITON_CACHE_DIR` | `/vllm-cache/triton-cache` |
+| `TORCH_EXTENSIONS_DIR` | `/vllm-cache/torch_extensions` |
+
+The host path is `JIT_CACHE_DIR` (default `${HOME}/.cache/vllm-dspark`) — **keep it on local
+disk on every node**. If you already ran with a shared cache, purge the poisoned directories
+once; a stale `sampling.so` survives the config change.
+
+Credit [@antoniohlc](https://github.com/antoniohlc), issue #27, who found the whole set one
+crash at a time and reproduced this repo's numbers (69.8–73.8 tok/s warm single-stream) once it
+was fixed. The **model weights** in `HF_CACHE` are fine on NFS; it is only the JIT tree that
+must be per-node.
 
 ### Garble fix (2026-07-03)
 
