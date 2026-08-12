@@ -28,6 +28,16 @@ services:
       # (HFValidationError: Repo id must be in the form ...).
       - ${LOCAL_MODELS_DIR:-${HF_CACHE:-${HOME}/.cache/huggingface}}:/models:ro
       - ${HF_CACHE:-${HOME}/.cache/huggingface}:/cache/huggingface
+      # NODE-LOCAL JIT/compile caches — deliberately a SEPARATE mount from
+      # HF_CACHE. Seven caches are written concurrently by both ranks; if they
+      # land on a shared (NFS) HF cache the failures are serial and misleading:
+      # a torch.compile makedirs race, DeepGEMM "runtime != nullptr" from
+      # half-written cubins, and — worst — an ABI-mismatched FlashInfer
+      # sampling.so built by one node and silently loaded by the other, silent
+      # because this stack runs FLASHINFER_DISABLE_VERSION_CHECK=1. None of the
+      # error messages point at the cache. Reported by @antoniohlc (issue #27),
+      # who lost a day to it. Keep JIT_CACHE_DIR on local disk on every node.
+      - ${JIT_CACHE_DIR:-${HOME}/.cache/vllm-dspark}:/vllm-cache
       # DSpark source patches are baked into the image from recipe/overlay/
       # (see README "vLLM version note"); do not bind-mount a proposer copy
       # here — a copy from one vLLM version crashes another.
@@ -37,7 +47,21 @@ services:
       HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
       TRANSFORMERS_OFFLINE: "${TRANSFORMERS_OFFLINE:-0}"
       HF_HUB_DISABLE_XET: "${HF_HUB_DISABLE_XET:-1}"
-      VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
+      # All seven JIT/workspace caches point at the node-local /vllm-cache
+      # volume above, NOT at the HF cache tree. See the volume comment and
+      # issue #27 — the set matters, they were found one crash at a time.
+      VLLM_CACHE_ROOT: /vllm-cache
+      DG_JIT_CACHE_DIR: /vllm-cache/deepgemm-cache
+      FLASHINFER_WORKSPACE_BASE: /vllm-cache/flashinfer
+      TILELANG_CACHE_DIR: /vllm-cache/tilelang
+      TORCHINDUCTOR_CACHE_DIR: /vllm-cache/torchinductor-cache
+      TRITON_CACHE_DIR: /vllm-cache/triton-cache
+      TORCH_EXTENSIONS_DIR: /vllm-cache/torch_extensions
+      # Engine-ready timeout. The stock 600 s trips torch.distributed teardown
+      # on a warm restart of this model, which loads 155 GiB across two nodes;
+      # the second startup then dies with no useful error. 3600 matches the
+      # sparkrun profile (PR #19) — this line is the compose-side mirror.
+      VLLM_ENGINE_READY_TIMEOUT_S: "${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
       # Long-context crash fix kill-switch (see docs/LONG_CONTEXT_CRASH_FIX.md).
       # 1 (default) = clamp stale DSpark draft-KV slot ids; 0 = detect+log only.
       DSPARK_SLOT_CLAMP: "${DSPARK_SLOT_CLAMP:-1}"

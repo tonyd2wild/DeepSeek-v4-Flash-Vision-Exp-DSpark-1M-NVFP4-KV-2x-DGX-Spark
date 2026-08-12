@@ -173,6 +173,17 @@ env:
   VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "256"
   VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
   VLLM_SKIP_INIT_MEMORY_CHECK: "1"
+  # WARNING: this assumes /cache/huggingface is NODE-LOCAL. If you share the HF
+  # cache between the two nodes over NFS to avoid downloading 167 GB twice, both
+  # ranks JIT into the same directories and you get, in order: a torch.compile
+  # makedirs race, DeepGEMM "runtime != nullptr" from half-written cubins, and an
+  # ABI-mismatched FlashInfer sampling.so built by one node and silently loaded
+  # by the other (silent because FLASHINFER_DISABLE_VERSION_CHECK=1 below).
+  # In that case override ALL SEVEN onto a node-local path — the set matters:
+  #   VLLM_CACHE_ROOT, DG_JIT_CACHE_DIR, FLASHINFER_WORKSPACE_BASE,
+  #   TILELANG_CACHE_DIR, TORCHINDUCTOR_CACHE_DIR, TRITON_CACHE_DIR,
+  #   TORCH_EXTENSIONS_DIR
+  # See README "Sharing the HF cache over NFS" and issue #27 (@antoniohlc).
   VLLM_CACHE_ROOT: /cache/huggingface/vllm-cache
   HF_HUB_DISABLE_XET: "1"
   # FlashInfer sampler is part of the 2026-07-03 DSpark garble fix.
