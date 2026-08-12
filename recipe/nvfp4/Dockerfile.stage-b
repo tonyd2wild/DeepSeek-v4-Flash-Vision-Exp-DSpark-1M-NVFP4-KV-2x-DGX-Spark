@@ -1,6 +1,25 @@
 ARG BASE_IMAGE=vllm-dspark-runtime:mia-raf-pr1-nvfp4-a
 FROM ${BASE_IMAGE}
 
+# CONTRACT — the heredoc delimiters below are load-bearing OUTSIDE Docker.
+#
+# The sparkrun recipe cannot run `docker build`. It rebuilds this stage inside an
+# already-running container by sed-extracting the Python between the quoted-PY
+# heredoc marker on the next line and the lone PY terminator at the end of the
+# file, then piping that to the interpreter — see the `pre_exec` block in
+# sparkrun/deepseek-v4-flash-0731-dspark-nvfp4-1m-vllm.yaml. Consequences:
+#
+#   * keep exactly ONE such heredoc per stage file
+#   * keep the opening marker exactly as written below: quoted, no space
+#   * keep the terminator alone in column 1, no trailing whitespace
+#   * do not add a second heredoc, and do not switch to COPY-a-script
+#   * do not repeat either marker inside this comment — sed matches the FIRST
+#     occurrence, so the extraction would start here instead and hand shell
+#     text to python
+#
+# Changing any of that does not break `docker build`; it breaks sparkrun
+# silently, and it surfaces much later as a missing NVFP4 patch anchor. If the
+# mechanism has to change, change the sparkrun extractor in the same commit.
 RUN /opt/env/bin/python - <<'PY'
 from pathlib import Path
 
