@@ -107,6 +107,12 @@ services:
       NCCL_IB_DISABLE: "${NCCL_IB_DISABLE:-0}"
       NCCL_IB_HCA: "${NCCL_IB_HCA}"
       NCCL_SOCKET_IFNAME: "${NCCL_SOCKET_IFNAME}"
+      # Without this pass-through, NCCL_IB_MERGE_NICS=1 in .env.dspark reaches
+      # the launcher's shell but NEVER the container: compose has no env_file,
+      # so it delivers only the names listed here. The .env.dspark.example sets
+      # it and DEFAULT-CONFIG.md credits it with 98 -> 161 Gb/s busbw, but the
+      # container has always come up with it unset.
+      NCCL_IB_MERGE_NICS: "${NCCL_IB_MERGE_NICS:-}"
       # The base image bakes GLOO_SOCKET_IFNAME/TP_SOCKET_IFNAME for the
       # author's NIC. On any other host those interfaces do not exist and
       # rank init dies in ProcessGroupGloo (gloo/transport/tcp/device.cc).
