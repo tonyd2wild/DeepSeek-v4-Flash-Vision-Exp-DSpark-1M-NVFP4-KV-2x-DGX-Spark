@@ -6,6 +6,23 @@ services:
     restart: unless-stopped
     shm_size: "64gb"
 
+    # Log to the journal, not to the container's json-file.
+    #
+    # stop-deepseek-v4-flash-dspark.sh runs `docker compose ... down`, which
+    # removes the containers -- and json-file logs die with the container they
+    # belong to. By the time you know you want a log, the container that held
+    # it is gone. journald keeps the lines after the container is removed.
+    #
+    # Retrieve with (the -a matters -- vLLM's progress bars emit carriage
+    # returns, and without -a journalctl renders them as "[108B blob data]"):
+    #   journalctl -a CONTAINER_TAG=dspark-vllm-dspark-recipe-vllm-dspark-1
+    #
+    # `docker logs` keeps working under this driver, so no workflow changes.
+    logging:
+      driver: journald
+      options:
+        tag: "dspark-vllm-{{.Name}}"
+
     ulimits:
       memlock: -1
       stack: 67108864
