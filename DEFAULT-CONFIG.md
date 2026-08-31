@@ -106,6 +106,17 @@ Measured on this hardware and rejected — each was neutral or worse:
   As-deployed on probe-c-p2b (which predates Patch 3) it was injected via bind-mount:
   `-v /var/tmp/patch3-scheduler.py:/opt/env/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py:ro`
   (source = repo `recipe/overlay/vllm/v1/core/sched/scheduler.py`).
+- **Patch 4 (DSpark draft shared-expert loader fix — REQUIRED on probe-c images):** in a fresh
+  stage-c build it's baked in. On the pre-patch probe-c-p2b image it must be injected via bind-mount
+  **right after the Patch 3 mount** — omitting it loads the draft's always-on shared expert
+  uninitialised and runs at ~half speed, silently (see [`DSPARK-SHARED-EXPERT-FIX.md`](DSPARK-SHARED-EXPERT-FIX.md)):
+  `-v /var/tmp/spec-dspark.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py:ro`
+  (source = repo `recipe/overlay/vllm/v1/spec_decode/dspark.py`). Verify with
+  `docker exec <container> grep -c shared_experts /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py`
+  → expect **6** (stock loader returns 0), or run [`scripts/check-patch4.sh`](scripts/check-patch4.sh).
+  The current **vision** deployment (`DeepSeek-V4-Flash-Vision-Exp`) runs this exact probe-c image
+  with both bind-mounts **plus** the `ds4v_*.py` vision-model mounts — see
+  [`VISION-EXP-DEFAULT-CONFIG.md`](VISION-EXP-DEFAULT-CONFIG.md).
 
 ## Exact vLLM command (byte-for-byte, as running)
 ```
