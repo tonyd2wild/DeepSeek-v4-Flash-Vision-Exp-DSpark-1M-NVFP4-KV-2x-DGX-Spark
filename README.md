@@ -20,9 +20,15 @@ reference implementation, explicitly "rather than a production serving engine."
 
 | | measured, 2x GB10, TP2, temperature 0 |
 |---|---|
-| Text, count-to-100 | **55.9 tok/s** median · 58.0 peak |
-| DSpark acceptance | 0.628 · **4.14** mean accepted length (k=5) |
+| **KV cache pool** | **2,904,519 tokens** (18.18 GiB) |
+| **Context** | **1,500,000** per request · max concurrency **1.94x** |
 | Vision, 336x336 + 26-token answer | **1.03 s** end to end |
+| Image understanding | colour **and** position correct, both orientations |
+
+Running the repo's existing **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
+`MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` — with the vision port
+on top. **Use `k=3`, not the 0731 recipe's `k=5`:** this release moved
+`num_nextn_predict_layers` from 1 to 3, and carrying k=5 across measurably underperforms.
 
 **→ [Full guide, the twelve blockers, and the port: `vision-exp/`](vision-exp/README.md)**
 

@@ -34,7 +34,7 @@ test -f /var/tmp/patch3-scheduler.py || { echo "patch3-scheduler.py MISSING at /
 mkdir -p "$HOME/.cache/vllm-dspark" "$HOME/.cache/huggingface"
 docker rm -f "$NAME" 2>/dev/null || true
 
-SPEC='{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
+SPEC='{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'
 REASON='{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
 
 docker run -d --name "$NAME" --restart no \
@@ -104,11 +104,11 @@ docker run -d --name "$NAME" --restart no \
       --tensor-parallel-size 2 --pipeline-parallel-size 1 \
       --kv-cache-dtype nvfp4_ds_mla \
       --block-size 256 \
-      --max-model-len 350000 \
+      --max-model-len 1500000 \
       --max-num-seqs 12 \
       --max-num-batched-tokens 8192 \
       --max-cudagraph-capture-size 12 \
-      --gpu-memory-utilization 0.80 \
+      --gpu-memory-utilization 0.85 \
       --enable-prefix-caching \
       --async-scheduling \
       --enable-chunked-prefill \

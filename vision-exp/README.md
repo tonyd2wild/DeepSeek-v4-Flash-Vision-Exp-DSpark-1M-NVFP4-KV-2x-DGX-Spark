@@ -105,17 +105,37 @@ Each was a real error, in the order they surfaced:
 
 ## Measured (2x DGX Spark GB10, TP2, temperature 0)
 
+Running the repo's **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
+`MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3`,
+`draft_sample_method=probabilistic` — with the vision port on top.
+
 | | |
 |---|---|
-| Text, count-to-100 | **55.9 tok/s** median, 58.0 peak |
-| DSpark acceptance | 0.628 ratio, **4.14** mean accepted length (k=5, max 6) |
-| Vision, 336x336 + 26-token answer | **1.03 s** end to end |
-| Image block, 112x112 | 117 tokens · 168x168 → 143 · 336x336 → 129 |
+| **KV cache pool** | **2,904,519 tokens** (18.18 GiB) |
+| **Context** | **1,500,000** per request · max concurrency **1.94x** |
+| Vision, 112x112 image | correct on colour *and* side, both orientations |
+| Vision, 336x336 + 26-token answer | 1.03 s end to end |
+| Image block size | 112x112 → 117 tokens · 168x168 → 143 · 336x336 → 129 |
 
-Correctness spot-checks, temperature 0, both exactly right:
+KV pool is a **per-boot** figure, not a fixed property — this repo's own README records an
+11% swing between two boots of an identical config, because available KV memory on GB10
+varies with what else has touched unified memory.
+
+### Speculative depth: use k=3, not k=5
+
+This release changed `num_nextn_predict_layers` from **1 to 3**. Carrying the 0731 recipe's
+`num_speculative_tokens: 5` across measurably underperforms — at 1M/gmu 0.78 it gave
+accept ratio **0.542**, mean accepted length **3.71**, and **52.1 tok/s** on count-to-300.
+`MTP_NUM_TOKENS=3` is what the repo's validated profile already specifies, and it matches the
+checkpoint's predict-layer count.
+
+### Correctness spot-checks (temperature 0)
 
 - red-left / blue-right, 112x112 → *"Red is on the left side. Blue is on the right side."*
 - green-top / yellow-bottom, 168x168 → *"Green and Yellow. The split is: Horizontal. The color on top is: Green."*
+
+Different colours, different split axis, different image sizes — all correct, and the
+image-block token counts match the reference math.
 
 ## Known deviations from the reference — read before claiming parity
 
@@ -159,8 +179,13 @@ sudo rm -rf ~/.cache/vllm-dspark/modelinfos
 ```
 
 Everything from the base recipe is unchanged: `--kv-cache-dtype nvfp4_ds_mla`,
-`--block-size 256`, DSpark `num_speculative_tokens: 5`, `draft_sample_method: probabilistic`,
-patch 3, and the full NCCL/env block.
+`--block-size 256`, `draft_sample_method: probabilistic`, patch 3, and the full NCCL/env
+block. Use the validated agent-serving profile — **1.5M context, gmu 0.85, seqs 12, k=3**.
+
+> **gmu 0.78 vs 0.85:** `DEFAULT-CONFIG.md` warns that 0.80 "boots and passes smoke tests,
+> then dies under traffic" (issue #8) because DSpark allocates buffers on the *first real
+> request*. The validated agent profile uses **0.85** and is the one measured here; 0.78
+> is the conservative single-lane value and yields a much smaller pool (1,482,106 tokens).
 
 ## Prior art
 
