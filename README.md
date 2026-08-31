@@ -1,10 +1,48 @@
 # DeepSeek V4 Flash (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV
 
+## 🆕 2026-08-31 — now running **DeepSeek-V4-Flash-Vision-Exp**, with native vision
+
+DeepSeek released
+[**DeepSeek-V4-Flash-Vision-Exp**](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp)
+today — the first multimodal model in the V4 family. **It is deployed here the same day,
+on 2x DGX Spark at TP2, with real image input and DSpark speculative decoding intact.**
+
+```
+"Based on the image, the two colors are red and blue.
+ Red is on the left side. Blue is on the right side."
+```
+
+Not a sidecar and not a VLM proxy — the model's own 32-block ViT and aligner running
+inside vLLM. This needed a genuine port: vLLM's `DeepseekV4ForCausalLM` is the **text-only**
+class, and the vision checkpoint reports the *same* architecture string while carrying 316
+tensors vLLM has nowhere to put, so it fails to load at all. DeepSeek shipped only a
+reference implementation, explicitly "rather than a production serving engine."
+
+| | measured, 2x GB10, TP2, temperature 0 |
+|---|---|
+| Text, count-to-100 | **55.9 tok/s** median · 58.0 peak |
+| DSpark acceptance | 0.628 · **4.14** mean accepted length (k=5) |
+| Vision, 336x336 + 26-token answer | **1.03 s** end to end |
+
+**→ [Full guide, the twelve blockers, and the port: `vision-exp/`](vision-exp/README.md)**
+
+Two deviations from the reference are documented there and are **not** yet fixed —
+bidirectional attention inside image spans, and the new `bias_vl` modality-specific MoE
+routing bias. Both affect image quality, neither affects text. Read that section before
+quoting this against benchmarks.
+
+Text-only `0731` is unchanged and still fully supported — every patch is guarded on
+`vision_n_layers`, so the same files serve both checkpoints.
+
+---
+
 > Self-contained two-node DGX Spark recipe for serving DeepSeek-V4-Flash with vLLM
 > TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla` KV cache —
 > 1M-token calibrated context (pushed to 1.5M), clean under agent concurrency.
 >
-> **Covers both checkpoints:**
+> **Covers all three checkpoints:**
+> - **`deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`** (2026-08-31, multimodal) — **native vision,
+>   55.9 tok/s text.** See [`vision-exp/`](vision-exp/README.md).
 > - **`deepseek-ai/DeepSeek-V4-Flash-0731`** (official release) — **78 tok/s peak, ~55 typical.**
 >   Requires [Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch); without it you get
 >   roughly half speed at unchanged output quality. **Start here →
