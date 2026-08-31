@@ -121,13 +121,34 @@ KV pool is a **per-boot** figure, not a fixed property — this repo's own READM
 11% swing between two boots of an identical config, because available KV memory on GB10
 varies with what else has touched unified memory.
 
-### Speculative depth: use k=3, not k=5
+### Speculative depth: use k=3, not k=5 — measured
 
 This release changed `num_nextn_predict_layers` from **1 to 3**. Carrying the 0731 recipe's
-`num_speculative_tokens: 5` across measurably underperforms — at 1M/gmu 0.78 it gave
-accept ratio **0.542**, mean accepted length **3.71**, and **52.1 tok/s** on count-to-300.
+`num_speculative_tokens: 5` across wastes the tail of every draft:
+
+| count-to-300, temp 0 | k=5 | **k=3** |
+|---|---|---|
+| accept ratio | 0.542 | **0.830** |
+| mean accepted length | 3.71 / max 6 (62%) | **3.49 / max 4 (87%)** |
+| throughput | 52.1 tok/s | **54.6** (peak 55.1) |
+
 `MTP_NUM_TOKENS=3` is what the repo's validated profile already specifies, and it matches the
 checkpoint's predict-layer count.
+
+### Throughput is below the text-only build — known, not yet explained
+
+54.6 tok/s on count-to-300 sits under the ~70-80 the text-only 0731 recipe reaches.
+Decomposing: 54.6 / 3.49 accepted-per-step = **15.6 decode steps/sec**, versus ~20 needed
+for 70 tok/s at the same acceptance. Since the drafter is now running at 87% of its
+ceiling, **the gap is per-step cost, not speculation.** Two untested candidates:
+
+1. **Vision tax.** This build sets `requires_raw_input_tokens = True` so the runner slices
+   and passes raw token ids every forward step (the text-only build does not), and the ViT
+   plus aligner stay resident on both ranks.
+2. **Context ceiling.** 1.5M means larger DSA indexer buffers per step than the 350K used in
+   the older "as running" block.
+
+A single reload at 350K with everything else held constant separates the two.
 
 ### Correctness spot-checks (temperature 0)
 
