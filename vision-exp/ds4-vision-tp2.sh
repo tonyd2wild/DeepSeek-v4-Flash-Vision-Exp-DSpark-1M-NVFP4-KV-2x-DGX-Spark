@@ -68,6 +68,10 @@ docker run -d --name "$NAME" --restart no \
   -e TRITON_CACHE_DIR=/vllm-cache/triton-cache \
   -e TORCH_EXTENSIONS_DIR=/vllm-cache/torch_extensions \
   -e VLLM_ENGINE_READY_TIMEOUT_S=3600 \
+  `# Inference-time RPC deadline -- ENGINE_READY_TIMEOUT_S above covers boot only.` \
+  `# vLLM default is 300s, shorter than a cold JIT triggered mid-inference by an` \
+  `# MoE/batch shape warmup missed; the worker blocks and the engine is shut down (#8).` \
+  -e VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800}" \
   -e DSPARK_SLOT_CLAMP=1 \
   -e VLLM_HOST_IP="$HOST_IP" \
   -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 \
