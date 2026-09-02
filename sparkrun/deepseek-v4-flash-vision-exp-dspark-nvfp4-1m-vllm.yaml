@@ -23,13 +23,11 @@
 #   * num_nextn_predict_layers 1 -> 3  (the DSpark drafter is now 3 layers)
 #   * rms_norm_eps 1e-6 -> 1e-20
 #   * ffn.gate.{weight,tid2eid} -> + bias (text) + bias_vl (image), on ALL 43 layers
-# k (num_speculative_tokens): default 5 for parity with the text recipe /
-# VISION-EXP-DEFAULT-CONFIG.md ("do not use k=6"). NOTE: this checkpoint has
-# num_nextn_predict_layers=3, and the vision-exp-default branch measured k=3 better
-# (accept 0.830 / 54.6 tok/s vs 0.542 / 52.1 tok/s at k=5 on count-to-300). k=3 is a
-# valid drop-in if you prefer measured peak acceptance over parity with 0731; k must
-# still be a value the drafter accepts (k=6 is rejected at boot: "must be divisible by
-# n_predict").
+# k (num_speculative_tokens): 5. This is the default everywhere in this repo and is not
+# a preference — the earlier "k=3 wins on this checkpoint" A/B was measured WITHOUT the
+# Patch 4 spec-dspark.py mount, which silently loads the draft's shared expert
+# uninitialised and collapses acceptance (issue #48). With Patch 4 mounted, k=5 wins.
+# k=6 is rejected at boot ("must be divisible by n_predict=5").
 # IMPORTANT invariants (identical to the text recipe):
 #   * VLLM_USE_B12X_MOE=1 is mandatory (=0 silently falls back to DEEPGEMM_MXFP4).
 #   * No --override-generation-config / repetition_penalty (DSpark spec-decode crash).
@@ -87,11 +85,10 @@ defaults:
   tokenizer_mode: deepseek_v4
   tool_call_parser: deepseek_v4
   reasoning_parser: deepseek_v4
-  # k=5 for parity with the text recipe / VISION-EXP-DEFAULT-CONFIG.md. See the header
-  # comment: k=3 measured better on this checkpoint (num_nextn_predict_layers=3) on the
-  # vision-exp-default branch — swap to 3 if you prioritize measured peak acceptance.
+  # k=5 — the validated default with Patch 4 mounted. Do not swap to k=3; see the header
+  # comment and issue #48 (the k=3 A/B was an unpatched measurement, now retracted).
   speculative_config: '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
-  reasoning_config: '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}'
+  reasoning_config: '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
   # Vision-Exp ships NO Jinja chat template (encoding/ scripts only), so the runtime
   # builds the prompt from the deepseek_v4 tokenizer. thinking:false = throughput-
   # optimized (the deployed-vision default). To enable reasoning, set
@@ -212,7 +209,7 @@ pre_exec:
       echo "[dspark-overlay] done: runtime now equivalent to vllm-dspark-runtime:dspark-nvfp4-stage-c @ $COMMIT"
     fi
   # --- VISION PORT: fetch vision-exp-default @ d39f94a, patch model.py + registry.py ---
-  # Lands exactly where the port's ds4-vision-tp2.sh mounts them:
+  # Lands exactly where the port's launchers/ds4-vision-tp2.sh mounts them:
   #   patch_vision.py   -> vllm/models/deepseek_v4/nvidia/model.py   (in place, idempotent)
   #   patch_registry.py -> vllm/model_executor/models/registry.py   (in place, idempotent)
   #   ds4v_vision.py    -> vllm/models/deepseek_v4/nvidia/ds4v_vision.py (new)
@@ -295,7 +292,7 @@ pre_exec:
 # error out with "Server port never became ready" while the cluster actually boots fine.
 # Use the standalone ./speedtest-starfall.sh against the running server instead.
 
-# Mirrors vision-exp/ds4-vision-tp2.sh as closely as sparkrun's templating allows.
+# Mirrors launchers/ds4-vision-tp2.sh as closely as sparkrun's templating allows.
 # sparkrun's vllm-distributed runtime appends --nnodes / --node-rank / --master-addr /
 # --master-port (+ --headless on the worker) automatically; NCCL_IB_HCA /
 # NCCL_SOCKET_IFNAME / GID are injected per host by sparkrun's InfiniBand auto-detection.

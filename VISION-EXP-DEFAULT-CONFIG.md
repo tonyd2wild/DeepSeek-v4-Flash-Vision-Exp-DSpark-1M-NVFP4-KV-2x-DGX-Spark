@@ -1,5 +1,10 @@
 # VISION-EXP DEFAULT CONFIG — DeepSeek-V4-Flash-Vision-Exp + DSpark, 2× DGX Spark
 
+> **Recipe summary lives in [`CURRENT.md`](CURRENT.md).** The runnable launcher is
+> [`launchers/ds4-vision-tp2.sh`](launchers/ds4-vision-tp2.sh) (TP2) and
+> [`launchers/ds4-vision-tp4.sh`](launchers/ds4-vision-tp4.sh) (TP4). This page is the
+> long-form explanation of the TP2 flags.
+
 > **Current default deployment (2026-08-31).** This is the experimental **vision** build of
 > DeepSeek-V4-Flash (native image input) as we run it today. It is the same two-node DSpark
 > recipe as [`DEFAULT-CONFIG.md`](DEFAULT-CONFIG.md) / the text README, pointed at the vision
@@ -59,9 +64,13 @@ The vision port passes the same flags as the text recipe's "CURRENT BEST" profil
 weights. The bind-mounts above are added to the `docker run` / compose service; the served command
 is:
 
+> This block is transcribed from [`launchers/ds4-vision-tp2.sh`](launchers/ds4-vision-tp2.sh),
+> which is the executable source of truth. If the two ever disagree, the launcher wins.
+
 ```
 /opt/env/bin/vllm serve <path-to-DeepSeek-V4-Flash-Vision-Exp> \
-  --served-model-name deepseek-v4-flash-vision-exp \
+  --hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}' \
+  --served-model-name deepseek-v4-flash-dspark \
   --host 0.0.0.0 --port 8888 \
   --trust-remote-code \
   --tensor-parallel-size 2 --pipeline-parallel-size 1 \
@@ -70,18 +79,42 @@ is:
   --max-model-len 1048576 \
   --max-num-seqs 12 \
   --max-num-batched-tokens 8192 \
+  --max-cudagraph-capture-size 12 \
   --gpu-memory-utilization 0.85 \
   --enable-prefix-caching \
+  --async-scheduling \
+  --enable-chunked-prefill \
   --speculative-config '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}' \
   --tokenizer-mode deepseek_v4 \
   --distributed-executor-backend mp \
   --tool-call-parser deepseek_v4 --enable-auto-tool-choice \
   --reasoning-parser deepseek_v4 \
+  --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}' \
   --default-chat-template-kwargs '{"thinking":false}' \
   --generation-config vllm \
+  --enable-flashinfer-autotune \
   --nnodes 2 --node-rank <0|1> \
   --master-addr <head-fabric-ip> --master-port <port>
 ```
+
+Flag notes:
+
+- **`--served-model-name deepseek-v4-flash-dspark`** — the id clients ask for is the *text*
+  recipe's id, deliberately: the vision build is a drop-in replacement on the same endpoint, so
+  agents wired to `deepseek-v4-flash-dspark` do not need rewiring. Earlier revisions of this doc
+  said `deepseek-v4-flash-vision-exp`; that was never what the launcher passed.
+- **`--hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}'`** — selects the
+  multimodal registry alias added by `ds4v_registry.py`. Without it vLLM decides
+  `is_multimodal_model` from its static arch-name table and answers "is not a multimodal model".
+- **`--max-model-len 1048576`** — 1M, the model's true YaRN ceiling and the standard across both
+  topologies. (The launcher previously passed `1500000`.)
+- **`--max-cudagraph-capture-size 12`** — pinned to `max_num_seqs` on TP2. The TP4 launcher uses
+  `64` with `--max-num-seqs 64`.
+- **`--async-scheduling`, `--enable-chunked-prefill`, `--enable-flashinfer-autotune`** — carried
+  over from the text recipe's CURRENT BEST profile; they were omitted from earlier revisions of
+  this block by mistake.
+- **`--reasoning-config`** — `<think>` / `</think>` markers, paired with
+  `--default-chat-template-kwargs '{"thinking":false}'` (thinking off by default).
 
 Runtime env (B12X, DSpark, NCCL/RoCE, JIT-cache split) is identical to
 [`DEFAULT-CONFIG.md`](DEFAULT-CONFIG.md) and [`docker-compose.dspark.yml`](docker-compose.dspark.yml)

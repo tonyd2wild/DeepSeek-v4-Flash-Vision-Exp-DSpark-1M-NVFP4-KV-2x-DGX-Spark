@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # build-ds4v-files.sh [IMAGE] [DEST]
 #
-# Produces the four files that ds4-vision-tp2.sh bind-mounts. Run it on EVERY node.
+# Produces the four files that launchers/ds4-vision-tp2.sh (and launchers/ds4-vision-tp4.sh)
+# bind-mount. Run it on EVERY node.
 #
 # Two of the four are shipped in this repo and are copied verbatim:
 #   vision-exp/port/ds4v_vision.py   ported ViT + Aligner
