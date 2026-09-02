@@ -1,0 +1,181 @@
+{
+ "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+ "endpoint": "hosted-aggregator (paid tier, provider-pinned per response)",
+ "provider_fingerprint": "extra_sampling_logprobs/last_activation schema (≈fireworks, no official confirmation)",
+ "protocol": {
+  "version": "v3",
+  "reasoning_effort": "max",
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "seeds": [
+   1234,
+   2345,
+   3456
+  ],
+  "harness": "lm-eval 0.4.12",
+  "date_frozen": "2026-08-05",
+  "budgets": {
+   "mmlu_pro": 24000,
+   "aime25": 30000,
+   "ifeval": 16000,
+   "gpqa_diamond": 20000,
+   "gsm8k": 14000,
+   "aa_lcr": 6000
+  },
+  "limits": {
+   "mmlu_pro": 80,
+   "aime25": 30,
+   "ifeval": 80,
+   "gpqa_diamond_cot_zeroshot": 60,
+   "gsm8k": 50,
+   "aa_lcr": 100,
+   "hle_text": 120,
+   "scicode": 65,
+   "lcb_codegen": 175,
+   "tb_hard": 44,
+   "tau2_telecom": 114
+  },
+  "limits_note": "--limit is per-subtask in lm-eval: mmlu_pro (14 subtasks) at --limit 80 is n=1120 total. All other tasks are single-task (limit = n).",
+  "effective_n": {
+   "mmlu_pro": 1120,
+   "aime25": 30,
+   "ifeval": 80,
+   "gpqa_diamond_cot_zeroshot": 60,
+   "gsm8k": 50
+  },
+  "seed_note": "The three hosted runs were launched with --seed only, which in lm-eval 0.4.12 seeds python/numpy/torch/fewshot but NOT the request payload (that is the --model_args seed, which defaulted to 1234 for all runs). The run-to-run spread in this card therefore reflects server-side nondeterminism, not sampler seeds. run_parity_bench.sh now passes seed into --model_args, so local runs ARE seed-independent samples.",
+  "effort_render_fingerprint": {
+   "method": "1-token request, prompt_tokens readback: bare vs reasoning_effort=max",
+   "reference_deltas": {
+    "none": 0,
+    "high": 79,
+    "max": 92
+   },
+   "hosted_card_value": "not captured at card freeze (2026-08-05) — a deviation from this card can be card-side if the hosted backend rendered a different preamble; any card revision must capture it. run_parity_bench.sh now records the local value in parity-results/effort_fingerprint.txt and aborts on delta 0 (stock vLLM ignores reasoning_effort entirely)."
+  }
+ },
+ "metric_keys": {
+  "mmlu_pro": "exact_match,custom-extract",
+  "aime25": "exact_match,none",
+  "ifeval": "prompt_level_strict_acc,none",
+  "gpqa_diamond_cot_zeroshot": "exact_match,flexible-extract",
+  "gsm8k": "exact_match,flexible-extract",
+  "aa_lcr": "judge_equivalence(ds4-flash, shared)",
+  "hle_text": "judge_equivalence(ds4-flash, shared)",
+  "scicode_sub": "subproblem_correctness (inspect-ai scorer)",
+  "scicode_main": "problem_correctness (inspect-ai scorer)",
+  "lcb_codegen": "pass@1 (official harness eval)",
+  "tb_hard": "resolved_rate (Terminus-2, pass@1)",
+  "tau2_telecom": "pass^1 (ENV_ASSERTION/ACTION checks)"
+ },
+ "results": {
+  "aime25": {
+   "median": 0.7,
+   "runs": [
+    0.7,
+    0.7,
+    0.7333
+   ],
+   "n_runs": 3
+  },
+  "ifeval": {
+   "median": 0.9375,
+   "runs": [
+    0.9,
+    0.9375,
+    0.9375
+   ],
+   "n_runs": 3
+  },
+  "gpqa_diamond_cot_zeroshot": {
+   "median": 0.7333,
+   "runs": [
+    0.6667,
+    0.7333,
+    0.7667
+   ],
+   "n_runs": 3
+  },
+  "mmlu_pro": {
+   "median": 0.8366,
+   "runs": [
+    0.8259,
+    0.8366,
+    0.8411
+   ],
+   "n_runs": 3
+  },
+  "gsm8k": {
+   "median": 1.0,
+   "runs": [
+    0.98,
+    1.0,
+    1.0
+   ],
+   "n_runs": 3
+  },
+  "aa_lcr": {
+   "median": 0.65,
+   "runs": [
+    0.65
+   ],
+   "n_runs": 1
+  },
+  "hle_text": {
+   "median": 0.15,
+   "runs": [
+    0.15
+   ],
+   "n_runs": 1
+  },
+  "scicode_sub": {
+   "median": 0.3127,
+   "runs": [
+    0.3127
+   ],
+   "n_runs": 1
+  },
+  "scicode_main": {
+   "median": 0.0462,
+   "runs": [
+    0.0462
+   ],
+   "n_runs": 1
+  },
+  "lcb_codegen": {
+   "median": 0.5657,
+   "runs": [
+    0.5657
+   ],
+   "n_runs": 1
+  },
+  "tb_hard": {
+   "median": 0.4524,
+   "runs": [
+    0.4524
+   ],
+   "n_runs": 1
+  },
+  "tau2_telecom": {
+   "median": 1.0,
+   "runs": [
+    1.0
+   ],
+   "n_runs": 1
+  }
+ },
+ "notes": {
+  "aa_lcr": "juez compartido ds4-flash (oficial no especificado); n_runs=1 por coste de input (~10M tok); contexts ~100K tok",
+  "hle_text": "subset texto (sin imagen), muestreo fijo seed 1234 de 2500; plantilla oficial Explanation/Answer/Confidence; juez compartido (oficial usa o3-mini)",
+  "scicode": "harness=inspect-ai 0.3.69 (official SciCode integration; no lm-eval task exists); test split, 65 problems / 291 subproblems, WITHOUT annotated background (standard hard setting); max_tokens=30000 (14/288 generations still truncated — effort max is hungry); effort=max via env-gated patch of inspect-ai's openai provider; reference band: DeepSeek-R1 leaderboard = 4.6 main / 28.5 sub",
+  "lcb_codegen": "official LiveCodeBench harness @28fef95, code_generation_lite v6 (175 problems, window 2025-01→2025-04 — most recent published; predates the 0731 checkpoint, contamination not ruled out); breakdown easy 43/43, medium 38/52, hard 18/80; 82/175 hit the 30K cap (68 with no extractable code → 0) — the hard split is budget-limited at effort=max, not purely capability-limited",
+  "tb_hard": "AA-hard subset, 44 tasks @74221fb (42 scored; not run: ['polyglot-rust-c', 'write-compressor']); 1 repetition; uniform 3600s timeout (AA uses per-task defaults + global 24h + 1M-input/rep budget — not enforced by harness 0.2.18); default Terminus-2 scaffold; token counters at 0 (harness bug), estimated cost $4-8; comparable in spirit, not citable as AA methodology",
+  "tau2_telecom": "114/114, tau2-bench v1.0.1 telecom base split, 1 trial; DS4 agent (temp 0.6, 30K, no stops), user-sim gpt-5.6-luna temp 0.0 (hosted aggregator); verified: 209/209 env assertions, 516/516 action checks, 1894 agent + 2553 sim calls with real metadata, user_stop termination on all; cost $4.35. PERFECT > published SOTA — read with caution: n=1, compliant sim at temp 0, generous max_steps 200, upstream base split; comparable in spirit, not citable as AA methodology"
+ },
+ "parity_targets": [
+  "mmlu_pro",
+  "aime25",
+  "ifeval"
+ ],
+ "non_targets_note": "Rows outside parity_targets are reference context only (different harnesses/costs; see notes) — they are not reproduced by run_parity_bench.sh."
+}
