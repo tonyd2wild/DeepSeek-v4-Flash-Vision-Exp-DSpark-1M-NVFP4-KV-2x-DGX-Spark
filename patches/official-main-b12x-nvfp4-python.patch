@@ -233,6 +233,15 @@ index 19381ef..aefa424 100644
              # Reserve workspace during initialization
              assert vllm_config is not None and vllm_config.model_config is not None
              prefill_workspace_size = get_prefill_workspace_size(
+@@ -1010,7 +1011,7 @@ class FlashMLASparseImpl(SparseMLAAttentionImpl[FlashMLASparseMetadata]):
+         assert self.topk_indices_buffer is not None
+         topk_indices = self.topk_indices_buffer[:num_actual_toks]
+ 
+-        use_fp8_cache = self.kv_cache_dtype == "fp8_ds_mla"
++        use_fp8_cache = self.kv_cache_dtype in ("fp8_ds_mla", "nvfp4_ds_mla")
+ 
+         if not use_fp8_cache:
+             attn_out = self._forward_bf16_kv(
 diff --git a/vllm/v1/kv_cache_interface.py b/vllm/v1/kv_cache_interface.py
 index 323b1e7..d14637b 100644
 --- a/vllm/v1/kv_cache_interface.py
