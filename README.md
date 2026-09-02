@@ -27,8 +27,7 @@ reference implementation, explicitly "rather than a production serving engine."
 
 Running the repo's existing **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
 `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` — with the vision port
-on top. **Use `k=3`, not the 0731 recipe's `k=5`:** this release moved
-`num_nextn_predict_layers` from 1 to 3, and carrying k=5 across measurably underperforms.
+on top. **Use `k=5`, same as the 0731 recipe, with Patch 4 mounted.** An earlier version of this branch said k=3: that A/B was measured without the Patch 4 `spec-dspark.py` mount, which silently halves the draft's acceptance (see `vision-exp/README.md`, [#48](../../issues/48)). With Patch 4 present, k=5 wins count-to-300 by a third and code is neutral. This release moved `num_nextn_predict_layers` from 1 to 3, which is why the drafter deserves a second look, but not at k=3.
 
 **→ [Full guide, the twelve blockers, and the port: `vision-exp/`](vision-exp/README.md)**
 
@@ -48,7 +47,7 @@ Text-only `0731` is unchanged and still fully supported — every patch is guard
 >
 > **Covers all three checkpoints:**
 > - **`deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`** (2026-08-31, multimodal) — **native vision,
->   55.9 tok/s text.** See [`vision-exp/`](vision-exp/README.md).
+>   55.9 tok/s text, measured before the Patch 4 mount was added to the vision launcher; with Patch 4, #48 measures 85.5 count / 49.9 code / 29.5 prose.** See [`vision-exp/`](vision-exp/README.md).
 > - **`deepseek-ai/DeepSeek-V4-Flash-0731`** (official release) — **78 tok/s peak, ~55 typical.**
 >   Requires [Patch 4](patches/0004-dspark-shared-expert-gate-up-proj.patch); without it you get
 >   roughly half speed at unchanged output quality. **Start here →

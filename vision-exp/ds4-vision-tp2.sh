@@ -30,11 +30,13 @@ esac
 test -d "$MODELS_HOST/DeepSeek-V4-Flash-Vision-Exp" || {
   echo "MODEL MISSING at $MODELS_HOST/DeepSeek-V4-Flash-Vision-Exp" >&2; exit 3; }
 test -f /var/tmp/patch3-scheduler.py || { echo "patch3-scheduler.py MISSING at /var/tmp" >&2; exit 4; }
+test -f /var/tmp/spec-dspark.py || { echo "spec-dspark.py (Patch 4, DSpark shared-expert loader fix) MISSING at /var/tmp — source: recipe/overlay/vllm/v1/spec_decode/dspark.py on main" >&2; exit 4; }
 
 mkdir -p "$HOME/.cache/vllm-dspark" "$HOME/.cache/huggingface"
 docker rm -f "$NAME" 2>/dev/null || true
 
-SPEC='{"method":"dspark","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'
+# k=5 matches the main default recipe. The earlier k=3 default came from an A/B run without the Patch 4 mount (issue #48).
+SPEC='{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
 REASON='{"reasoning_parser":"deepseek_v4","reasoning_start_str":"<think>","reasoning_end_str":"</think>"}'
 
 docker run -d --name "$NAME" --restart no \
@@ -45,6 +47,8 @@ docker run -d --name "$NAME" --restart no \
   -v "$HOME/.cache/huggingface:/cache/huggingface" \
   -v "$HOME/.cache/vllm-dspark:/vllm-cache" \
   -v /var/tmp/patch3-scheduler.py:/opt/env/lib/python3.12/site-packages/vllm/v1/core/sched/scheduler.py:ro \
+  `# Patch 4: DSpark draft shared-expert loader fix. Without it the always-on shared expert loads uninitialised and the draft runs at ~half speed, silently (DSPARK-SHARED-EXPERT-FIX.md). Verify: scripts/check-patch4.sh` \
+  -v /var/tmp/spec-dspark.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py:ro \
   `# Vision-Exp port: DeepseekV4ForCausalLM has no vision tower/aligner, so the` \
   `# stock class rejects the checkpoint with "no module or parameter named aligner".` \
   `# ds4v_model.py = image's model.py + patch_vision.py; ds4v_vision.py = ported ViT+Aligner.` \

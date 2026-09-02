@@ -121,7 +121,10 @@ KV pool is a **per-boot** figure, not a fixed property — this repo's own READM
 11% swing between two boots of an identical config, because available KV memory on GB10
 varies with what else has touched unified memory.
 
-### Speculative depth: use k=3, not k=5 — measured
+### Speculative depth: k=5 (the k=3 finding below was measured without Patch 4)
+
+> **Correction (2026-09-02, after [issue #48](../../../issues/48) and [PR #44](../../../pull/44)):** the A/B below was run with a launcher that did **not** bind-mount the Patch 4 `spec-dspark.py` (DSpark shared-expert loader fix). Without it the draft's always-on shared expert loads uninitialised, acceptance collapses, and the 0.542 accept ratio at k=5 is that loader's signature, not a property of the vision drafter. The launcher in this branch now mounts Patch 4 and defaults to **k=5**, matching the main recipe. Measured **with** Patch 4 on a second 2× DGX Spark (BPAMLUX, #48, warm, temp 0, 500K ctx): k=5 count-to-300 **85.5 tok/s** (accept 0.974, 5.88 tok/step) vs k=3 64.4; code 49.9 vs 49.5 (neutral); prose 29.5 vs 32.1 (k=3 +9%). The numbers below are kept for the record as the unpatched measurement; our own re-measurement on this rig is pending.
+
 
 This release changed `num_nextn_predict_layers` from **1 to 3**. Carrying the 0731 recipe's
 `num_speculative_tokens: 5` across wastes the tail of every draft:
@@ -137,7 +140,7 @@ checkpoint's predict-layer count.
 
 ### Throughput is below the text-only build — known, not yet explained
 
-54.6 tok/s on count-to-300 sits under the ~70-80 the text-only 0731 recipe reaches.
+54.6 tok/s on count-to-300 (unpatched, see the correction above; with Patch 4 the same workload measured 85.5 tok/s in #48) sits under the ~70-80 the text-only 0731 recipe reaches.
 Decomposing: 54.6 / 3.49 accepted-per-step = **15.6 decode steps/sec**, versus ~20 needed
 for 70 tok/s at the same acceptance. Since the drafter is now running at 87% of its
 ceiling, **the gap is per-step cost, not speculation.** Two untested candidates:
@@ -201,7 +204,7 @@ sudo rm -rf ~/.cache/vllm-dspark/modelinfos
 
 Everything from the base recipe is unchanged: `--kv-cache-dtype nvfp4_ds_mla`,
 `--block-size 256`, `draft_sample_method: probabilistic`, patch 3, and the full NCCL/env
-block. Use the validated agent-serving profile — **1.5M context, gmu 0.85, seqs 12, k=3**.
+block. Use the validated agent-serving profile — **1.5M context, gmu 0.85, seqs 12, k=5** (k=5 with Patch 4 mounted; the earlier k=3 profile predates the Patch 4 fix).
 
 > **gmu 0.78 vs 0.85:** `DEFAULT-CONFIG.md` warns that 0.80 "boots and passes smoke tests,
 > then dies under traffic" (issue #8) because DSpark allocates buffers on the *first real
