@@ -47,8 +47,8 @@ left without any bias at all. No paper or model card documents it.
 
 ## Staging the four bind-mounted files
 
-`ds4-vision-tp2.sh` bind-mounts four files from `/var/tmp`. **Generate them with one
-command, on every node:**
+[`launchers/ds4-vision-tp2.sh`](../launchers/ds4-vision-tp2.sh) bind-mounts four files from
+`/var/tmp`. **Generate them with one command, on every node:**
 
 ```bash
 git clone https://github.com/tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark
@@ -84,7 +84,8 @@ fails here instead of surfacing later as `is not a multimodal model`.
 | `port/ds4v_mm.py` | vLLM multimodal plumbing: processing info, dummy inputs, and a custom processor. The checkpoint has no HF processor, so preprocessing (resize solver, patchify, N-layout block build) is ported from `inference/image_processor.py`. |
 | `port/patch_vision.py` | Idempotent patcher for vLLM's vendored `deepseek_v4/nvidia/model.py` — 11 anchored edits. |
 | `port/patch_registry.py` | Registers a multimodal architecture alias (see below). |
-| `ds4-vision-tp2.sh` | Launcher. Byte-for-byte the DEFAULT-CONFIG command plus the vision mounts and `--hf-overrides`. |
+| [`../launchers/ds4-vision-tp2.sh`](../launchers/ds4-vision-tp2.sh) | TP2 launcher (canonical path is now `launchers/`; `vision-exp/ds4-vision-tp2.sh` is a symlink kept for older PR/issue links). Byte-for-byte the DEFAULT-CONFIG command plus the vision mounts and `--hf-overrides`. |
+| [`../launchers/ds4-vision-tp4.sh`](../launchers/ds4-vision-tp4.sh) | TP4 launcher, all four Sparks. Same file extended to 4 nodes, at `max-num-seqs 64` / `max-cudagraph-capture-size 64`. |
 
 Every patch is guarded on `vision_n_layers > 0`, so **text-only 0731 keeps its exact
 previous behaviour** through the same files.
@@ -136,9 +137,11 @@ Each was a real error, in the order they surfaced:
 
 ## Measured (2x DGX Spark GB10, TP2, temperature 0)
 
-Running the repo's **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
+Measured on the profile as it stood at the time — `MAX_MODEL_LEN=1500000`,
 `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3`,
-`draft_sample_method=probabilistic` — with the vision port on top.
+`draft_sample_method=probabilistic` — with the vision port on top. **The validated profile is now
+`MAX_MODEL_LEN=1048576` and `MTP_NUM_TOKENS=5`** (see [`CURRENT.md`](../CURRENT.md)); the KV/context
+figures in this table were taken at 1.5M and are not the current numbers.
 
 | | |
 |---|---|
@@ -157,17 +160,22 @@ varies with what else has touched unified memory.
 > **Correction (2026-09-02, after [issue #48](../../../issues/48) and [PR #44](../../../pull/44)):** the A/B below was run with a launcher that did **not** bind-mount the Patch 4 `spec-dspark.py` (DSpark shared-expert loader fix). Without it the draft's always-on shared expert loads uninitialised, acceptance collapses, and the 0.542 accept ratio at k=5 is that loader's signature, not a property of the vision drafter. The launcher in this branch now mounts Patch 4 and defaults to **k=5**, matching the main recipe. Measured **with** Patch 4 on a second 2× DGX Spark (BPAMLUX, #48, warm, temp 0, 500K ctx): k=5 count-to-300 **85.5 tok/s** (accept 0.974, 5.88 tok/step) vs k=3 64.4; code 49.9 vs 49.5 (neutral); prose 29.5 vs 32.1 (k=3 +9%). The numbers below are kept for the record as the unpatched measurement; our own re-measurement on this rig is pending.
 
 
-This release changed `num_nextn_predict_layers` from **1 to 3**. Carrying the 0731 recipe's
-`num_speculative_tokens: 5` across wastes the tail of every draft:
+This release changed `num_nextn_predict_layers` from **1 to 3**, which is why the drafter deserved
+a second look. It did not turn out to justify k=3.
 
-| count-to-300, temp 0 | k=5 | **k=3** |
-|---|---|---|
-| accept ratio | 0.542 | **0.830** |
-| mean accepted length | 3.71 / max 6 (62%) | **3.49 / max 4 (87%)** |
-| throughput | 52.1 tok/s | **54.6** (peak 55.1) |
+**RETRACTED — do not use these numbers.** The table below is the unpatched (no Patch 4)
+measurement, kept only as the record of what was originally published:
 
-`MTP_NUM_TOKENS=3` is what the repo's validated profile already specifies, and it matches the
-checkpoint's predict-layer count.
+> | ~~count-to-300, temp 0~~ | ~~k=5~~ | ~~k=3~~ |
+> |---|---|---|
+> | ~~accept ratio~~ | ~~0.542~~ | ~~0.830~~ |
+> | ~~mean accepted length~~ | ~~3.71 / max 6 (62%)~~ | ~~3.49 / max 4 (87%)~~ |
+> | ~~throughput~~ | ~~52.1 tok/s~~ | ~~54.6 (peak 55.1)~~ |
+
+The 0.542 accept ratio at k=5 is the uninitialised shared-expert loader's signature, not a
+property of the vision drafter. **`MTP_NUM_TOKENS=5` is the validated setting**, matching the
+main recipe and what [`launchers/ds4-vision-tp2.sh`](../launchers/ds4-vision-tp2.sh) and
+[`launchers/ds4-vision-tp4.sh`](../launchers/ds4-vision-tp4.sh) pass.
 
 ### Throughput is below the text-only build — known, not yet explained
 
@@ -229,13 +237,13 @@ cp port/ds4v_vision.py port/ds4v_mm.py /var/tmp/
 sudo rm -rf ~/.cache/vllm-dspark/modelinfos
 
 # worker first, then head
-./ds4-vision-tp2.sh 1     # bluey  (holds weights, NFS-exports them)
-./ds4-vision-tp2.sh 0     # asusi  (head, serves :8888)
+../launchers/ds4-vision-tp2.sh 1     # bluey  (holds weights, NFS-exports them)
+../launchers/ds4-vision-tp2.sh 0     # asusi  (head, serves :8888)
 ```
 
 Everything from the base recipe is unchanged: `--kv-cache-dtype nvfp4_ds_mla`,
 `--block-size 256`, `draft_sample_method: probabilistic`, patch 3, and the full NCCL/env
-block. Use the validated agent-serving profile — **1.5M context, gmu 0.85, seqs 12, k=5** (k=5 with Patch 4 mounted; the earlier k=3 profile predates the Patch 4 fix).
+block. Use the validated agent-serving profile — **1M context (1,048,576), gmu 0.85, seqs 12, k=5** (k=5 with Patch 4 mounted; the earlier k=3 profile predates the Patch 4 fix). See [`CURRENT.md`](../CURRENT.md).
 
 > **gmu 0.78 vs 0.85:** `DEFAULT-CONFIG.md` warns that 0.80 "boots and passes smoke tests,
 > then dies under traffic" (issue #8) because DSpark allocates buffers on the *first real

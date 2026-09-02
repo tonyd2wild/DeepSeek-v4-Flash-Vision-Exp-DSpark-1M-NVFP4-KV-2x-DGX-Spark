@@ -36,9 +36,10 @@ Config notes carried in the recipe header: this checkpoint ships NO Jinja chat t
 multimodal registry alias (without it vLLM answers "is not a multimodal model"); the
 compile/JIT caches are forced node-local ("/cache/runtime") because sharing the HF cache
 over NFS between the two ranks races torch.compile (see the header comment and the text
-recipe's NFS warning). "k" defaults to 5 for parity with the text recipe; the
-"vision-exp-default" branch measured k=3 better (accept 0.830 vs 0.542) since this
-checkpoint has "num_nextn_predict_layers=3" — swap if you prefer measured peak acceptance.
+recipe's NFS warning). "k" is 5, same as the text recipe. Do NOT swap to k=3: the earlier
+"k=3 wins on this checkpoint" A/B was measured without the Patch 4 "spec-dspark.py" mount,
+which silently loads the draft's shared expert uninitialised (issue #48). That result is
+retracted; with Patch 4 mounted, k=5 wins.
 
 Known port deviations (image quality only, not crashes) and the full write-up are in
 vision-exp/README.md in this repo.

@@ -1,4 +1,12 @@
-# DeepSeek V4 Flash Vision-Exp (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV
+# DeepSeek-V4-Flash-Vision-Exp (DSpark) on DGX Spark — TP2 (2 nodes) or TP4 (4 nodes), 1M context, NVFP4 KV
+
+**Current recipe: see [`CURRENT.md`](CURRENT.md).** That file, not this page, is the source of truth.
+
+**Launchers:** [`launchers/ds4-vision-tp2.sh <0|1>`](launchers/ds4-vision-tp2.sh) — ranks 1 (bluey) then 0 (asusi, head) · [`launchers/ds4-vision-tp4.sh <0|1|2|3>`](launchers/ds4-vision-tp4.sh) — ranks 3, 2, 1, then 0 (asusi, head). Both serve `:8888` as **`deepseek-v4-flash-dspark`**.
+
+**Preflight — Patch 4 fails silently, so check it before trusting any number:** `./scripts/check-patch4.sh <head-container> <worker-container>`
+
+Everything else on this page is reference; `archive/` (coming) is history.
 
 ## 🆕 2026-08-31 — now running **DeepSeek-V4-Flash-Vision-Exp**, with native vision
 
@@ -25,9 +33,11 @@ reference implementation, explicitly "rather than a production serving engine."
 | Vision, 336x336 + 26-token answer | **1.03 s** end to end |
 | Image understanding | colour **and** position correct, both orientations |
 
-Running the repo's existing **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
-`MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` — with the vision port
-on top. **Use `k=5`, same as the 0731 recipe, with Patch 4 mounted.** An earlier version of this branch said k=3: that A/B was measured without the Patch 4 `spec-dspark.py` mount, which silently halves the draft's acceptance (see `vision-exp/README.md`, [#48](../../issues/48)). With Patch 4 present, k=5 wins count-to-300 by a third and code is neutral. This release moved `num_nextn_predict_layers` from 1 to 3, which is why the drafter deserves a second look, but not at k=3.
+Measured on the profile as it stood that day — `MAX_MODEL_LEN=1500000`, `MAX_NUM_SEQS=12`,
+`GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` — with the vision port on top. **The current
+validated profile is `MAX_MODEL_LEN=1048576` (1M) and `MTP_NUM_TOKENS=5`; the KV/context figures
+in the table above were taken at 1.5M and are not current — see [`CURRENT.md`](CURRENT.md).**
+**Use `k=5`, same as the 0731 recipe, with Patch 4 mounted.** An earlier version of this branch said k=3: that A/B was measured without the Patch 4 `spec-dspark.py` mount, which silently halves the draft's acceptance (see `vision-exp/README.md`, [#48](../../issues/48)). With Patch 4 present, k=5 wins count-to-300 by a third and code is neutral. This release moved `num_nextn_predict_layers` from 1 to 3, which is why the drafter deserves a second look, but not at k=3.
 
 **→ [Full guide, the twelve blockers, and the port: `vision-exp/`](vision-exp/README.md)**
 
@@ -443,7 +453,7 @@ Keep these `.env.dspark` values unless you are deliberately experimenting:
 - `MAX_MODEL_LEN=1048576` — **1M, the model's true YaRN ceiling** (see the note above)
 - `MAX_NUM_SEQS=12`
 - `GPU_MEMORY_UTILIZATION=0.85`
-- `MTP_NUM_TOKENS=3` (with `draft_sample_method=probabilistic`; see the [garble fix](#garble-fix-2026-07-03))
+- `MTP_NUM_TOKENS=5` (with `draft_sample_method=probabilistic`; see the [garble fix](#garble-fix-2026-07-03))
 - `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`
 - `VLLM_USE_B12X_WO_PROJECTION=1`
 - `VLLM_USE_FLASHINFER_SAMPLER=1`
@@ -1152,7 +1162,7 @@ python3 benchmarks/keys-concurrency/correctness_test.py http://127.0.0.1:8888
 ### 1M single-stream legacy profile
 
 For conservative single-stream testing, set `MAX_NUM_SEQS=1` and
-`VLLM_USE_B12X_WO_PROJECTION=0`. The default `MTP_NUM_TOKENS=3` with
+`VLLM_USE_B12X_WO_PROJECTION=0`. The default `MTP_NUM_TOKENS=5` with
 `draft_sample_method=probabilistic` (2026-07-03 garble fix) applies here too;
 older runs used greedy-draft MTP5, which upstream Mia and Keys had validated but
 which caused the cold-start concurrent garble in agent serving.
@@ -1162,8 +1172,8 @@ which caused the cold-start concurrent garble in agent serving.
 - To combine DSpark concurrency with longer context, pick a lower context target
   first, then raise concurrency slowly while watching boot logs, KV allocation,
   acceptance, and request errors.
-- The current validated agent-serving profile is `MAX_MODEL_LEN=1500000`,
-  `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` with
+- The current validated agent-serving profile is `MAX_MODEL_LEN=1048576`,
+  `MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=5` with
   `draft_sample_method=probabilistic`, `VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK=1`,
   `VLLM_USE_FLASHINFER_SAMPLER=1`, `VLLM_USE_B12X_WO_PROJECTION=1`, no
   `--override-generation-config` (2026-07-03 garble fix), and
@@ -1418,7 +1428,12 @@ recipe.
 
 | path | purpose |
 | --- | --- |
-| `VISION-EXP-DEFAULT-CONFIG.md` | current default: `DeepSeek-V4-Flash-Vision-Exp` serving config, mounts, benchmarks |
+| [`CURRENT.md`](CURRENT.md) | **start here** — the recipe we actually run today, one section per topology (TP2, TP4) |
+| [`launchers/`](launchers/) | the two runnable launchers: `ds4-vision-tp2.sh <0\|1>` and `ds4-vision-tp4.sh <0\|1\|2\|3>`. One launcher per recipe, canonical path. `vision-exp/ds4-vision-tp2.sh` is a symlink here (older PRs/issues cite it) |
+| [`vision-exp/`](vision-exp/README.md) | the vision port itself — the twelve blockers, `port/*.py`, `build-ds4v-files.sh` (stages the four bind-mounted files on every node) |
+| [`sparkrun/`](sparkrun/README.md) | self-contained sparkrun recipes for the Vision-Exp and text 0731 checkpoints |
+| [`parity/`](parity/) | reproducible serving-fidelity bench and the frozen hosted reference card |
+| `VISION-EXP-DEFAULT-CONFIG.md` | long-form explanation of the TP2 launcher's flags, mounts, benchmarks |
 | `DSPARK-SHARED-EXPERT-FIX.md` | Patch 4 write-up (incl. the vision-port dropped-mount incident) |
 | `scripts/check-patch4.sh` | fail-closed preflight that Patch 4 (`spec-dspark.py`) is mounted on every node |
 | `recipe/overlay/` | base DSpark vLLM overlay files |
