@@ -1,5 +1,46 @@
 # DeepSeek V4 Flash Vision-Exp (DSpark) on 2x DGX Spark — 1M context, NVFP4 KV
 
+## 🆕 2026-08-31 — now running **DeepSeek-V4-Flash-Vision-Exp**, with native vision
+
+DeepSeek released
+[**DeepSeek-V4-Flash-Vision-Exp**](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp)
+today — the first multimodal model in the V4 family. **It is deployed here the same day,
+on 2x DGX Spark at TP2, with real image input and DSpark speculative decoding intact.**
+
+```
+"Based on the image, the two colors are red and blue.
+ Red is on the left side. Blue is on the right side."
+```
+
+Not a sidecar and not a VLM proxy — the model's own 32-block ViT and aligner running
+inside vLLM. This needed a genuine port: vLLM's `DeepseekV4ForCausalLM` is the **text-only**
+class, and the vision checkpoint reports the *same* architecture string while carrying 316
+tensors vLLM has nowhere to put, so it fails to load at all. DeepSeek shipped only a
+reference implementation, explicitly "rather than a production serving engine."
+
+| | measured, 2x GB10, TP2, temperature 0 |
+|---|---|
+| **KV cache pool** | **2,904,519 tokens** (18.18 GiB) |
+| **Context** | **1,500,000** per request · max concurrency **1.94x** |
+| Vision, 336x336 + 26-token answer | **1.03 s** end to end |
+| Image understanding | colour **and** position correct, both orientations |
+
+Running the repo's existing **validated agent-serving profile** — `MAX_MODEL_LEN=1500000`,
+`MAX_NUM_SEQS=12`, `GPU_MEMORY_UTILIZATION=0.85`, `MTP_NUM_TOKENS=3` — with the vision port
+on top. **Use `k=5`, same as the 0731 recipe, with Patch 4 mounted.** An earlier version of this branch said k=3: that A/B was measured without the Patch 4 `spec-dspark.py` mount, which silently halves the draft's acceptance (see `vision-exp/README.md`, [#48](../../issues/48)). With Patch 4 present, k=5 wins count-to-300 by a third and code is neutral. This release moved `num_nextn_predict_layers` from 1 to 3, which is why the drafter deserves a second look, but not at k=3.
+
+**→ [Full guide, the twelve blockers, and the port: `vision-exp/`](vision-exp/README.md)**
+
+Two deviations from the reference are documented there and are **not** yet fixed —
+bidirectional attention inside image spans, and the new `bias_vl` modality-specific MoE
+routing bias. Both affect image quality, neither affects text. Read that section before
+quoting this against benchmarks.
+
+Text-only `0731` is unchanged and still fully supported — every patch is guarded on
+`vision_n_layers`, so the same files serve both checkpoints.
+
+---
+
 > Self-contained two-node DGX Spark recipe for serving DeepSeek-V4-Flash with vLLM
 > TP=2, DSpark speculative decoding, and an experimental `nvfp4_ds_mla` KV cache —
 > 1M-token calibrated context, clean under agent concurrency.
