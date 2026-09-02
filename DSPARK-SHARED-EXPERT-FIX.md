@@ -198,6 +198,38 @@ Apply with a read-only bind mount — no rebuild required:
 -v /var/tmp/spec-dspark.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py:ro
 ```
 
+## How this bit us again: the vision port dropped the mount (2026-08-31)
+
+When we stood up the serving port for the **vision** variant
+(`DeepSeek-V4-Flash-Vision-Exp`, our current default — see
+[`VISION-EXP-DEFAULT-CONFIG.md`](VISION-EXP-DEFAULT-CONFIG.md)), the run command carried the Patch 3
+scheduler mount and the four `ds4v_*.py` vision-model mounts but **silently dropped this
+`spec-dspark.py` (Patch 4) mount**. The stock loader took over, the draft's always-on shared expert
+loaded uninitialised, and decode ran at **roughly half speed** — with perfect output quality, so
+nothing looked broken. It failed **silently**, exactly as above: the dropped tensors are reported at
+`logger.debug`, invisible at INFO, and the load "reports success". Measured on our 2× DGX Spark
+(warmed, single-stream, temp 0): count-to-100 **50.7 → 80.1 tok/s**, code **47.2 → 51.8**, prose
+**30.4 → 33.2** once the mount was restored. (The count gain also carries a warm-up component;
+acceptance on prose-heavy traffic stays ~25% on this vision variant, which is why code/prose gained
+less than count. Patch 4 is a correctness fix regardless — the shared expert was uninitialised.)
+
+**Restore the one mount** and verify it landed on **every** node (head *and* worker):
+
+```bash
+-v /var/tmp/spec-dspark.py:/opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py:ro
+```
+
+```bash
+# Expect 6 — the two shared-expert mapping rows plus their comment. Stock loader returns 0.
+docker exec <container> grep -c shared_experts \
+  /opt/env/lib/python3.12/site-packages/vllm/v1/spec_decode/dspark.py     # -> 6
+
+# Definitive: with VLLM_LOGGING_LEVEL=DEBUG, no "Skipping unknown DSpark weight" for shared_experts:
+docker logs <container> 2>&1 | grep "Skipping unknown DSpark weight.*shared_experts"   # -> (empty)
+```
+
+Or run [`scripts/check-patch4.sh <head-container> <worker-container>`](scripts/check-patch4.sh).
+
 ## What this was NOT
 
 Recorded so nobody repeats the search. Every item below was measured, not assumed:
