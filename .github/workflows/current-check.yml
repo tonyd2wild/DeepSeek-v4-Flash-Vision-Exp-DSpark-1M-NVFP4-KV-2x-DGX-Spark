@@ -1,0 +1,25 @@
+name: CURRENT.md guard
+# Fails a PR that changes a launcher without changing CURRENT.md, or whose CURRENT.md
+# launcher hashes do not match the launchers in the tree. Keeps the golden recipe honest:
+# any config change has to be written down in the one file agents read first.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: launchers changed => CURRENT.md must change too (PRs only)
+        if: github.event_name == 'pull_request'
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          changed=$(git diff --name-only "$base" HEAD)
+          if echo "$changed" | grep -qE '^(launchers/|launch-[^/]*\.sh$|[^/]*launch[^/]*\.sh$)'; then
+            echo "$changed" | grep -q '^CURRENT.md$' || { echo "::error::a launcher changed but CURRENT.md did not. Update the golden record in the same PR."; exit 1; }
+          fi
+      - name: CURRENT.md hashes match the launchers
+        run: bash tools/check-current.sh

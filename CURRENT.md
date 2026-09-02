@@ -86,7 +86,7 @@ this repo is reference, history, or a second documented recipe. If a doc and a l
 `--gpu-memory-utilization 0.85`, `--max-model-len 1048576`. Differences from TP2:
 `--tensor-parallel-size 4`, `--nnodes 4`, **`--max-num-seqs 64`**, and
 **`--max-cudagraph-capture-size 64`** (the workspace copy of this launcher still said 12/12; the
-validated run used 64/64). CUDA-graph mode is `FULL_AND_PIECEWISE` — **verify**: the launcher does
+validated run used 64/64). CUDA graphs are on: `--enforce-eager` is not passed, `--max-cudagraph-capture-size 64` is, and the head log shows `Graph capturing finished in 10 secs, took 0.68 GiB`; the mode is vLLM's default for this image, not pinned by the launcher. Note: the launcher
 not set a cudagraph-mode env var, so this is the runtime's own default on this image rather than
 something we pin.
 
@@ -139,3 +139,8 @@ nothing a PR or issue links to changes path — `vision-exp/ds4-vision-tp2.sh` s
    if you are serving the vision build, use the launchers above.
 2. **`sparkrun/`** — the self-contained sparkrun recipes for both checkpoints, and **`parity/`**.
 
+The self-contained `sparkrun/` recipe serves under the id `deepseek-v4-flash-vision-exp`; the launchers here serve `deepseek-v4-flash-dspark`. Clients pointed at :8888 use the launcher's id.
+
+<!-- launcher hashes, maintained by tools/check-current.sh --write -->
+sha256 310e74b5a459f3cab876cd4d5edcbe67416ed74e408dfd965fd592a0bd0b1409  launchers/ds4-vision-tp2.sh
+sha256 3ace8ad8172c5a9c146e7dacc385b16d1e60049f65b7697527ec14eeead35ea4  launchers/ds4-vision-tp4.sh

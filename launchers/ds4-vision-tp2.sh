@@ -14,7 +14,8 @@ NODE_RANK="${1:?usage: ds4-vision-tp2.sh <0|1>}"
 
 IMAGE="vllm-dspark-runtime:mia-raf-pr1-nvfp4-probe-c-keys-concurrency-p2b"
 NAME="vllm_ds4_vision"
-MODEL_IN_CONTAINER="/models/DeepSeek-V4-Flash-Vision-Exp"
+MODEL_DIR="${MODEL_DIR:-DeepSeek-V4-Flash-Vision-Exp}"   # uncensored drop-in: MODEL_DIR=keys-DeepSeekV4Flash-Vision-EXP-ablit (same shards, same tokenizer)
+MODEL_IN_CONTAINER="/models/$MODEL_DIR"
 MASTER_ADDR="192.168.192.3"     # asusi
 MASTER_PORT="25440"
 PORT="8888"
@@ -27,8 +28,8 @@ case "$NODE_RANK" in
   *) echo "rank must be 0 or 1" >&2; exit 2 ;;
 esac
 
-test -d "$MODELS_HOST/DeepSeek-V4-Flash-Vision-Exp" || {
-  echo "MODEL MISSING at $MODELS_HOST/DeepSeek-V4-Flash-Vision-Exp" >&2; exit 3; }
+test -d "$MODELS_HOST/$MODEL_DIR" || {
+  echo "MODEL MISSING at $MODELS_HOST/$MODEL_DIR" >&2; exit 3; }
 test -f /var/tmp/patch3-scheduler.py || { echo "patch3-scheduler.py MISSING at /var/tmp" >&2; exit 4; }
 test -f /var/tmp/spec-dspark.py || { echo "spec-dspark.py (Patch 4, DSpark shared-expert loader fix) MISSING at /var/tmp — source: recipe/overlay/vllm/v1/spec_decode/dspark.py on main" >&2; exit 4; }
 
