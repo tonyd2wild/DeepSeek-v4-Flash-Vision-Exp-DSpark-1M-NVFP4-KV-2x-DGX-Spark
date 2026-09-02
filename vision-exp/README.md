@@ -45,6 +45,37 @@ applies to text tokens, `bias_vl` to image tokens — experts are chosen differe
 modality. It appears on **all 43 layers**, including the 3 hash-routing layers that 0731
 left without any bias at all. No paper or model card documents it.
 
+## Staging the four bind-mounted files
+
+`ds4-vision-tp2.sh` bind-mounts four files from `/var/tmp`. **Generate them with one
+command, on every node:**
+
+```bash
+git clone https://github.com/tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark
+cd DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark/vision-exp
+./build-ds4v-files.sh                      # or: ./build-ds4v-files.sh <image-tag> <dest>
+```
+
+Two of the four are shipped in this repo and copied verbatim (`ds4v_vision.py`,
+`ds4v_mm.py`). The other two are **derived from the image you are actually running**:
+
+| file | provenance |
+|---|---|
+| `ds4v_vision.py` | shipped — `vision-exp/port/ds4v_vision.py` |
+| `ds4v_mm.py` | shipped — `vision-exp/port/ds4v_mm.py` |
+| `ds4v_model.py` | *generated* — image's `deepseek_v4/nvidia/model.py` + `port/patch_vision.py` |
+| `ds4v_registry.py` | *generated* — image's `model_executor/models/registry.py` + `port/patch_registry.py` |
+
+**Why the last two are generated rather than checked in:** both are copies of vLLM files.
+A checked-in copy would pin you to one image build and drift silently the moment the image
+moves. Generating them means the port always applies to the image you run, and the
+patchers fail loudly (anchor count != 1) if the image changed underneath them.
+
+The script verifies its own output before installing — both files must parse, and
+`ds4v_model.py` must carry the vision import, the `bias_vl` gate and the loader guard,
+while `ds4v_registry.py` must carry the multimodal alias. A patcher that silently no-ops
+fails here instead of surfacing later as `is not a multimodal model`.
+
 ## The port
 
 | file | what it does |
