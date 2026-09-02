@@ -14,7 +14,35 @@ Everything here was deployed and measured on a real 2x DGX Spark pair on
 [main README](../README.md) is the reference — this file is just how to run
 it.
 
-## Quick start
+## Vision-Exp (native image input)
+
+The companion recipe "deepseek-v4-flash-vision-exp-dspark-nvfp4-1m-vllm.yaml" serves the
+experimental VISION build "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp" on the same runtime.
+It is the text recipe plus the vision port (a 32-block ViT + aligner inside vLLM), fetched
+and injected automatically by pre_exec from this repo's "vision-exp-default" branch
+(commit "d39f94a") — it is not in "main". Nothing has to be staged by hand on the nodes.
+
+```bash
+sparkrun run ./deepseek-v4-flash-vision-exp-dspark-nvfp4-1m-vllm.yaml
+```
+
+```bash
+curl -fsS http://<head-ip>:8888/v1/models   # served_model_name deepseek-v4-flash-vision-exp
+# text request; then an image request (image_url base64) to exercise the vision path.
+```
+
+Config notes carried in the recipe header: this checkpoint ships NO Jinja chat template
+(encoding/ scripts only) so "thinking:false" is default; "--hf-overrides" selects the
+multimodal registry alias (without it vLLM answers "is not a multimodal model"); the
+compile/JIT caches are forced node-local ("/cache/runtime") because sharing the HF cache
+over NFS between the two ranks races torch.compile (see the header comment and the text
+recipe's NFS warning). "k" defaults to 5 for parity with the text recipe; the
+"vision-exp-default" branch measured k=3 better (accept 0.830 vs 0.542) since this
+checkpoint has "num_nextn_predict_layers=3" — swap if you prefer measured peak acceptance.
+
+Known port deviations (image quality only, not crashes) and the full write-up are in
+vision-exp/README.md in this repo.
+
 
 Once, on your head node (~200 GB free disk per node):
 

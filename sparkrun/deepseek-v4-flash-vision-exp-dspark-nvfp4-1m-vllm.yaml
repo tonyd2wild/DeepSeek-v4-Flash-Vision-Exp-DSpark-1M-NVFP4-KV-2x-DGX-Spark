@@ -1,0 +1,337 @@
+# DeepSeek V4 Flash Vision-Exp (DSpark) — native image input, 1M ctx, NVFP4 KV — 2x DGX Spark
+# sparkrun recipe for the experimental VISION build DeepSeek-V4-Flash-Vision-Exp.
+# It is the text 0731 recipe + the vision port, fully self-contained: pre_exec fetches
+# the vision port from this repo's `vision-exp-default` branch (it is NOT in main — see
+# VISION-EXP-DEFAULT-CONFIG.md) and injects it into the runtime, so nothing must be
+# staged by hand on the nodes.
+# WHY A PORT IS NEEDED:
+#   DeepSeek-V4-Flash-Vision-Exp reports the SAME architectures string as text 0731
+#   (DeepseekV4ForCausalLM) but carries 316 extra tensors — a 32-block ViT, an aligner,
+#   and four learned embeddings (image_start/end/newline/pad) — with no home in the
+#   text-only class. vLLM dies on shard 00001 with:
+#     ValueError: There is no module or parameter named 'aligner' in DeepseekV4ForCausalLM
+#   The port (vision-exp/port/, commit d39f94a on vision-exp-default) registers the ViT +
+#   aligner + the four embeddings, teaches the weights mapper their prefixes, adds the
+#   per-layer MoE gate bias + bias_vl, and registers a multimodal architecture alias
+#   (DeepseekV4VForConditionalGeneration) selected via --hf-overrides — because vLLM
+#   answers is_multimodal_model from a STATIC arch-name table, not from the class.
+#   All patches are guarded on vision_n_layers>0, so text-only 0731 is unchanged.
+#   Full write-up (12 blockers, measured numbers, known deviations): vision-exp/README.md.
+# CHECKPOINT DIFFERENCES vs text 0731 (from the port README):
+#   * +10 vision_* config keys (vision_n_layers 32, vision_dim 1024, patch 14, 2D RoPE,
+#     downsample 3)
+#   * num_nextn_predict_layers 1 -> 3  (the DSpark drafter is now 3 layers)
+#   * rms_norm_eps 1e-6 -> 1e-20
+#   * ffn.gate.{weight,tid2eid} -> + bias (text) + bias_vl (image), on ALL 43 layers
+# k (num_speculative_tokens): default 5 for parity with the text recipe /
+# VISION-EXP-DEFAULT-CONFIG.md ("do not use k=6"). NOTE: this checkpoint has
+# num_nextn_predict_layers=3, and the vision-exp-default branch measured k=3 better
+# (accept 0.830 / 54.6 tok/s vs 0.542 / 52.1 tok/s at k=5 on count-to-300). k=3 is a
+# valid drop-in if you prefer measured peak acceptance over parity with 0731; k must
+# still be a value the drafter accepts (k=6 is rejected at boot: "must be divisible by
+# n_predict").
+# IMPORTANT invariants (identical to the text recipe):
+#   * VLLM_USE_B12X_MOE=1 is mandatory (=0 silently falls back to DEEPGEMM_MXFP4).
+#   * No --override-generation-config / repetition_penalty (DSpark spec-decode crash).
+#   * No VLLM_USE_V2_MODEL_RUNNER=1 (hard reject with DSpark).
+#   * No --attention-backend FLASHINFER_MLA_SPARSE_DSV4 (backend does not exist here).
+#   * max_cudagraph_capture_size deliberately NOT set: vLLM derives max_num_seqs x (k+1).
+#   * Patch 4 (draft shared-expert loader fix) is MANDATORY — without it the draft's
+#     always-on shared expert loads uninitialised and decode runs at ~half speed with
+#     perfect output, failing SILENTLY. pre_exec verifies it landed.
+#   * modelinfos/ inspection cache MUST be cleared after patching the model interface.
+# KNOWN PORT DEVIATIONS (image QUALITY only, not crashes): image spans use causal sparse
+# attention (no bidirectional window), and bias_vl is loaded but not applied. Text-only
+# requests are byte-identical to 0731.
+# Model: official deepseek-ai/DeepSeek-V4-Flash-Vision-Exp. Swap in any abliterated
+# Vision-Exp derivative (same layout) by changing the model field; the port is the same.
+
+recipe_version: "2"
+model: deepseek-ai/DeepSeek-V4-Flash-Vision-Exp
+runtime: vllm
+# Same digest-pinned public base as the text recipe. The recipe reproduces tonyd2wild's
+# `vllm-dspark-runtime:dspark-nvfp4-stage-c` runtime in-container (overlay -> nvfp4 stages)
+# and then injects the vision port on top. No manual image build, no private image.
+container: ghcr.io/bjk110/vllm-spark@sha256:d8492e7677cf1b9aaa3344e0e6865efc468454013eee5ebabac85be90af027be
+min_nodes: 2
+max_nodes: 2
+
+metadata:
+  description: >-
+    DeepSeek V4 Flash Vision-Exp (native image input) with DSpark speculative
+    decoding on 2x DGX Spark (TP=2): 1M context, nvfp4_ds_mla KV cache, B12X MoE,
+    Patch 3 + Patch 4, k=5, plus the vision port (ViT + aligner) injected in pre_exec.
+    Self-contained: the port is fetched from this repo's vision-exp-default branch.
+  maintainer: tonyd2wild
+  category: agent
+  kv_dtype: nvfp4
+
+defaults:
+  port: 8888
+  host: 0.0.0.0
+  tensor_parallel: 2
+  pipeline_parallel: 1
+  served_model_name: deepseek-v4-flash-vision-exp
+  kv_cache_dtype: nvfp4_ds_mla
+  block_size: 256
+  # 1M = the model's calibrated YaRN ceiling (65536 x factor 16). The vision-exp-default
+  # branch also validated 1500000 at gmu 0.85 (KV pool ~2.9M tokens) if you want to push
+  # it — but 1M is calibrated and matches the text recipe.
+  max_model_len: 1048576
+  # 12 slots / 0.85 gmu = the vision port's verified-live lane (VISION-EXP-DEFAULT-CONFIG.md
+  # and the vision-exp-default deployment). The text recipe's 6/0.78 profile is the
+  # conservative 0731 lane; the vision port runs 12/0.85 in production.
+  max_num_seqs: 12
+  max_num_batched_tokens: 8192
+  gpu_memory_utilization: 0.85
+  tokenizer_mode: deepseek_v4
+  tool_call_parser: deepseek_v4
+  reasoning_parser: deepseek_v4
+  # k=5 for parity with the text recipe / VISION-EXP-DEFAULT-CONFIG.md. See the header
+  # comment: k=3 measured better on this checkpoint (num_nextn_predict_layers=3) on the
+  # vision-exp-default branch — swap to 3 if you prioritize measured peak acceptance.
+  speculative_config: '{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}'
+  reasoning_config: '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}'
+  # Vision-Exp ships NO Jinja chat template (encoding/ scripts only), so the runtime
+  # builds the prompt from the deepseek_v4 tokenizer. thinking:false = throughput-
+  # optimized (the deployed-vision default). To enable reasoning, set
+  #   chat_template_kwargs: '{"thinking":true,"reasoning_effort":"high"}'
+  # (top-level reasoning_effort is ignored; levels low/high/max.)
+  chat_template_kwargs: '{"thinking":false}'
+
+benchmark:
+  framework: llama-benchy
+  timeout: 7200
+  args:
+    pp: [2048]
+    tg: [128]
+    depth: [0, 32768]
+    concurrency: [1, 2, 6]
+    runs: 2
+    book_url: https://raw.githubusercontent.com/microsoft/TypeScript/v5.5.4/src/compiler/checker.ts
+    served_model_name: deepseek-v4-flash-vision-exp
+
+env:
+  PYTHONUNBUFFERED: "1"
+  VLLM_ENGINE_READY_TIMEOUT_S: "3600"
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+  VLLM_TRITON_MLA_SPARSE: "1"
+  VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "256"
+  VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
+  VLLM_SKIP_INIT_MEMORY_CHECK: "1"
+  # The compile/JIT caches MUST be node-LOCAL. If the HF cache is shared between the two
+  # nodes over NFS (to avoid downloading 167 GB twice), BOTH TP ranks JIT into the same
+  # directories and you get, in order: a torch.compile makedirs race, DeepGEMM
+  # "runtime != nullptr" from half-written cubins, and an ABI-mismatched FlashInfer
+  # sampling.so (silent because FLASHINFER_DISABLE_VERSION_CHECK=1). The text recipe
+  # points VLLM_CACHE_ROOT into the HF cache and documents overriding all SEVEN onto a
+  # node-local path in that case. Here we point them at sparkrun's node-local runtime
+  # cache (/cache/runtime, bind of ~/.cache/sparkrun/runtime-cache on each host) so the
+  # vision port is safe regardless of how the HF cache is mounted. If /cache/runtime is
+  # not node-local on your fleet, repoint the seven vars below.
+  VLLM_CACHE_ROOT: /cache/runtime/vllm-cache
+  DG_JIT_CACHE_DIR: /cache/runtime/deepgemm-cache
+  TILELANG_CACHE_DIR: /cache/runtime/tilelang
+  HF_HUB_DISABLE_XET: "1"
+  VLLM_USE_FLASHINFER_SAMPLER: "1"
+  VLLM_USE_B12X_MOE: "1"
+  VLLM_USE_B12X_WO_PROJECTION: "1"
+  VLLM_B12X_W4A16_FORCE_BLOCKS_PER_SM: "0"
+  VLLM_B12X_W4A16_FORCE_BLOCKS_MAX_M: "16"
+  B12X_W4A16_TC_DECODE: "0"
+  VLLM_DSPARK_CONFIDENCE_THRESHOLD: "0.0"
+  VLLM_DSPARK_CONFIDENCE_SCHEDULER: "off"
+  VLLM_DSPARK_LOCAL_ARGMAX: "1"
+  VLLM_DSPARK_REPLICATE_MARKOV_W1: "1"
+  VLLM_DSPARK_FUSED_MARKOV_ARGMAX: "0"
+  VLLM_DSPARK_GPU_REJECTED_CONTEXT_MASK: "1"
+  VLLM_DSPARK_REFERENCE_KV_QUANT_DEQUANT: "0"
+  VLLM_DSPARK_HARDWARE_SCHEDULER_EARLY_STOP: "1"
+  VLLM_DSV4_B12X_COMPRESSED_MLA: "0"
+  VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE: "0"
+  VLLM_DSV4_DSPARK_DEFER_TARGET_CAPTURE_EXACT: "0"
+  DSPARK_SLOT_CLAMP: "1"
+  TORCH_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_CUDA_ARCH_LIST: "12.1a"
+  FLASHINFER_DISABLE_VERSION_CHECK: "1"
+  TILELANG_CLEANUP_TEMP_FILES: "1"
+  DG_JIT_USE_NVRTC: "0"
+  DG_JIT_NVCC_COMPILER: /opt/env/bin/nvcc
+  PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+  NCCL_CUMEM_ENABLE: "0"
+  NCCL_NVLS_ENABLE: "0"
+
+executor_config:
+  shm_size: 64gb
+
+# Reproduce the dspark-nvfp4-stage-c runtime in-container, then inject the vision port.
+# Everything is fetched from THIS repo so the recipe is self-contained and pinned.
+pre_exec:
+  - |
+    if [ ! -x /usr/bin/kill ] && [ ! -x /bin/kill ] && [ ! -x /usr/local/bin/kill ]; then
+      printf '#!/bin/bash\nbuiltin kill "$@"\n' > /usr/local/bin/kill
+      chmod +x /usr/local/bin/kill
+      echo "[dspark-overlay] installed /usr/local/bin/kill shim (image has no kill binary)"
+    fi
+  # --- base DSpark overlay + nvfp4 stages (same as the text recipe) ---
+  # Fetched from THIS repo @ the pinned commit, so the overlay and the vision port below
+  # come from a mutually-consistent tree.
+  - |
+    set -eu
+    VLLM_ROOT=/opt/env/lib/python3.12/site-packages/vllm
+    SRC=/tmp/dspark-overlay-src
+    COMMIT=c6673bc1409256e4f63beb820bdb18aa9257b279
+    if [ -e "$VLLM_ROOT/.sparkrun-dspark-overlay-$COMMIT" ]; then
+      echo "[dspark-overlay] already applied, skipping"
+    else
+      echo "[dspark-overlay] fetching vision recipe @ $COMMIT"
+      rm -rf "$SRC" /tmp/dspark-overlay.tar.gz
+      mkdir -p "$SRC"
+      /opt/env/bin/python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+        "https://codeload.github.com/tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark/tar.gz/$COMMIT" \
+        /tmp/dspark-overlay.tar.gz
+      tar -xzf /tmp/dspark-overlay.tar.gz -C "$SRC" --strip-components=1
+      echo "[dspark-overlay] applying base DSpark overlay files"
+      cp -a "$SRC/recipe/overlay/vllm/." "$VLLM_ROOT/"
+      for stage in a b c; do
+        echo "[dspark-overlay] applying nvfp4 stage-$stage patch"
+        sed -n "/<<'PY'/,/^PY$/p" "$SRC/recipe/nvfp4/Dockerfile.stage-$stage" | sed '1d;$d' | /opt/env/bin/python -
+      done
+      # NOTE: upstream's apply-nonuniform-guard.py is intentionally NOT run
+      # (it is for foreign prebuilt images only; stacking it on this overlay
+      # short-circuits the proposer's ragged path into always-rejected drafts).
+      echo "[dspark-overlay] verifying Patch 3 (cold-prefill garble fix) is present"
+      grep -q "is_prefill_chunk" "$VLLM_ROOT/v1/core/sched/scheduler.py" \
+        || { echo "[dspark-overlay] FATAL: Patch 3 missing — cold prefills would garble"; exit 1; }
+      echo "[dspark-overlay] verifying Patch 4 (draft shared-expert loader fix) is present"
+      grep -q "shared_experts.gate_up_proj" "$VLLM_ROOT/v1/spec_decode/dspark.py" \
+        || { echo "[dspark-overlay] FATAL: Patch 4 missing — 0731 would run at half speed"; exit 1; }
+      find "$VLLM_ROOT" -name __pycache__ -type d -prune -exec rm -rf {} + || true
+      /opt/env/bin/python -m py_compile "$VLLM_ROOT/envs.py" "$VLLM_ROOT/v1/core/sched/scheduler.py" "$VLLM_ROOT/v1/spec_decode/dspark.py" "$VLLM_ROOT/v1/spec_decode/dspark_proposer.py"
+      touch "$VLLM_ROOT/.sparkrun-dspark-overlay-$COMMIT"
+      echo "[dspark-overlay] done: runtime now equivalent to vllm-dspark-runtime:dspark-nvfp4-stage-c @ $COMMIT"
+    fi
+  # --- VISION PORT: fetch vision-exp-default @ d39f94a, patch model.py + registry.py ---
+  # Lands exactly where the port's ds4-vision-tp2.sh mounts them:
+  #   patch_vision.py   -> vllm/models/deepseek_v4/nvidia/model.py   (in place, idempotent)
+  #   patch_registry.py -> vllm/model_executor/models/registry.py   (in place, idempotent)
+  #   ds4v_vision.py    -> vllm/models/deepseek_v4/nvidia/ds4v_vision.py (new)
+  #   ds4v_mm.py        -> vllm/models/deepseek_v4/nvidia/ds4v_mm.py     (new)
+  - |
+    set -eu
+    VLLM_ROOT=/opt/env/lib/python3.12/site-packages/vllm
+    MODEL_DIR="$VLLM_ROOT/models/deepseek_v4/nvidia"
+    REGISTRY="$VLLM_ROOT/model_executor/models/registry.py"
+    VIS_COMMIT=d39f94af2471cb524ed5d9122c39efdd453eed4f
+    if [ ! -e "$VLLM_ROOT/.sparkrun-ds4v-port-$VIS_COMMIT" ]; then
+      echo "[vision-port] fetching vision-exp port @ $VIS_COMMIT"
+      rm -rf /tmp/ds4v-port-src /tmp/ds4v-port.tar.gz
+      mkdir -p /tmp/ds4v-port-src
+      /opt/env/bin/python -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+        "https://codeload.github.com/tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark/tar.gz/$VIS_COMMIT" \
+        /tmp/ds4v-port.tar.gz
+      tar -xzf /tmp/ds4v-port.tar.gz -C /tmp/ds4v-port-src --strip-components=1
+      PORT=/tmp/ds4v-port-src/vision-exp/port
+      test -f "$PORT/patch_vision.py" && test -f "$PORT/patch_registry.py" \
+        || { echo "[vision-port] FATAL: vision-exp/port missing in tarball"; exit 1; }
+      echo "[vision-port] patching DeepseekV4ForCausalLM (ViT + aligner + mapper + gate bias)"
+      /opt/env/bin/python "$PORT/patch_vision.py" "$MODEL_DIR/model.py"
+      echo "[vision-port] patching model registry (multimodal alias DeepseekV4VForConditionalGeneration)"
+      /opt/env/bin/python "$PORT/patch_registry.py" "$REGISTRY"
+      echo "[vision-port] installing ds4v_vision.py / ds4v_mm.py"
+      cp -f "$PORT/ds4v_vision.py" "$MODEL_DIR/ds4v_vision.py"
+      cp -f "$PORT/ds4v_mm.py"     "$MODEL_DIR/ds4v_mm.py"
+      find "$VLLM_ROOT" -name __pycache__ -type d -prune -exec rm -rf {} + || true
+      /opt/env/bin/python -m py_compile "$MODEL_DIR/model.py" "$MODEL_DIR/ds4v_vision.py" "$MODEL_DIR/ds4v_mm.py" "$REGISTRY"
+      echo "[vision-port] verifying patches landed"
+      grep -q "aligner" "$MODEL_DIR/model.py" \
+        || { echo "[vision-port] FATAL: aligner not found in patched model.py"; exit 1; }
+      grep -q "DeepseekV4VForConditionalGeneration" "$REGISTRY" \
+        || { echo "[vision-port] FATAL: multimodal alias not found in registry.py"; exit 1; }
+      touch "$VLLM_ROOT/.sparkrun-ds4v-port-$VIS_COMMIT"
+      echo "[vision-port] patched + verified"
+    else
+      echo "[vision-port] already applied, skipping"
+    fi
+    # vLLM caches model inspection in $VLLM_CACHE_ROOT/modelinfos/ keyed by module+class.
+    # Without clearing it, the alias reuses the stale pre-patch "text-only" entry and the
+    # API server refuses images with "is not a multimodal model" (port blocker #7).
+    rm -rf "$VLLM_CACHE_ROOT/modelinfos"
+    echo "[vision-port] cleared modelinfos inspection cache"
+    # Real import check — pulls in the patched model module -> ds4v_vision + ds4v_mm.
+    # Surfaces any vLLM-API mismatch immediately instead of after a 6-min boot.
+    /opt/env/bin/python -c "import vllm.models.deepseek_v4; from vllm.model_executor.models.registry import _MULTIMODAL_MODELS; assert 'DeepseekV4VForConditionalGeneration' in _MULTIMODAL_MODELS, 'alias missing'; print('[vision-port] import check OK: multimodal alias registered')"
+  # --- torch 2.11 AOTAutogradCache collision fix ---
+  # torch._functorch AOTAutogradCache._get_tmp_dir() returns <inductor-cache>/aotautograd,
+  # the SAME namespace vLLM's standalone_compile artifact cache writes to. One layer
+  # writes <key>/ as a DIRECTORY, the other writes <key> as a FILE. When both derive the
+  # same key for the same graph, os.makedirs(exist_ok=True) hits the file and the worker
+  # dies with "FileExistsError: .../aotautograd/<key>" (observed on every cold vision boot
+  # with shared JIT cache dirs). Give the functorch cache its own subdir — load and save
+  # both go through _get_tmp_dir, so this one-line change keeps BOTH caches working.
+  - |
+    set -eu
+    AUTOCACHE=/opt/env/lib/python3.12/site-packages/torch/_functorch/_aot_autograd/autograd_cache.py
+    if grep -q "aotautograd_functorch" "$AUTOCACHE"; then
+      echo "[torch-aotcache] already patched"
+    else
+      /opt/env/bin/python - "$AUTOCACHE" <<'PY'
+    import sys
+    path = sys.argv[1]
+    src = open(path).read()
+    old = 'return os.path.join(cache_dir(), "aotautograd")'
+    new = 'return os.path.join(cache_dir(), "aotautograd_functorch")'
+    assert src.count(old) == 1, "anchor found %d times" % src.count(old)
+    open(path, "w").write(src.replace(old, new, 1))
+    print("patched %s: functorch AOTAutogradCache -> aotautograd_functorch" % path)
+    PY
+      /opt/env/bin/python -m py_compile "$AUTOCACHE"
+      echo "[torch-aotcache] done"
+    fi
+
+# NOTE: no post_exec speed-test hook here, on purpose. sparkrun v0.2.40 runs post hooks
+# BEFORE it starts following logs, gated on a hardcoded 4-minute port-readiness timeout
+# — this model needs ~5-6 min to open the port, so any recipe post hook makes the launch
+# error out with "Server port never became ready" while the cluster actually boots fine.
+# Use the standalone ./speedtest-starfall.sh against the running server instead.
+
+# Mirrors vision-exp/ds4-vision-tp2.sh as closely as sparkrun's templating allows.
+# sparkrun's vllm-distributed runtime appends --nnodes / --node-rank / --master-addr /
+# --master-port (+ --headless on the worker) automatically; NCCL_IB_HCA /
+# NCCL_SOCKET_IFNAME / GID are injected per host by sparkrun's InfiniBand auto-detection.
+#   * --hf-overrides selects the multimodal registry alias. REQUIRED for image input —
+#     without it vLLM reports "is not a multimodal model".
+#   * --generation-config vllm and NO --override-generation-config is part of the garble
+#     fix (explicit client request params still win).
+#   * --max-cudagraph-capture-size deliberately absent (vLLM derives seqs x (k+1)).
+command: |
+  export PATH=/opt/env/bin:/opt/env/nvvm/bin:/opt/env/targets/sbsa-linux/nvvm/bin:$PATH &&
+  export CUDA_HOME=/opt/env/targets/sbsa-linux CUDA_PATH=/opt/env/targets/sbsa-linux CUDAToolkit_ROOT=/opt/env/targets/sbsa-linux &&
+  export LD_LIBRARY_PATH=/opt/env/lib:/opt/env/targets/sbsa-linux/lib:$LD_LIBRARY_PATH &&
+  /opt/env/bin/vllm serve {model} \
+    --hf-overrides '{"architectures":["DeepseekV4VForConditionalGeneration"]}' \
+    --served-model-name {served_model_name} \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --kv-cache-dtype {kv_cache_dtype} \
+    --block-size {block_size} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-prefix-caching \
+    --async-scheduling \
+    --enable-chunked-prefill \
+    --speculative-config '{speculative_config}' \
+    --tokenizer-mode {tokenizer_mode} \
+    --distributed-executor-backend mp \
+    --tool-call-parser {tool_call_parser} \
+    --enable-auto-tool-choice \
+    --reasoning-parser {reasoning_parser} \
+    --reasoning-config '{reasoning_config}' \
+    --default-chat-template-kwargs '{chat_template_kwargs}' \
+    --generation-config vllm \
+    --enable-flashinfer-autotune
