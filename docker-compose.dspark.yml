@@ -79,6 +79,16 @@ services:
       # the second startup then dies with no useful error. 3600 matches the
       # sparkrun profile (PR #19) — this line is the compose-side mirror.
       VLLM_ENGINE_READY_TIMEOUT_S: "${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
+      # Inference-time RPC deadline. ENGINE_READY_TIMEOUT_S above covers BOOT only.
+      # This one guards each execute_model call, and the vLLM default is 300s -- which
+      # is shorter than a cold CuTeDSL/TileLang JIT triggered by an MoE/batch shape the
+      # warmup never covered. When that happens mid-inference the worker blocks, the
+      # deadline declares it dead, and the engine shuts down (issue #8; same anatomy
+      # root-caused in MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark#65).
+      # 1800 covers observed inference-time JIT with margin. Raising it trades slower
+      # detection of a genuinely hung worker -- for that, the tell is 96% GPU at ~18W
+      # (spin-wait, not compute), which is far faster to check than any timeout.
+      VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: "${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-1800}"
       # Long-context crash fix kill-switch (see docs/LONG_CONTEXT_CRASH_FIX.md).
       # 1 (default) = clamp stale DSpark draft-KV slot ids; 0 = detect+log only.
       DSPARK_SLOT_CLAMP: "${DSPARK_SLOT_CLAMP:-1}"
