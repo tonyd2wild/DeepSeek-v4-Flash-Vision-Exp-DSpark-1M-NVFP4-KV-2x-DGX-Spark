@@ -191,6 +191,7 @@ services:
         --max-num-batched-tokens ${MAX_NUM_BATCHED_TOKENS:-8192}
         --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION:-0.80}
         --enable-prefix-caching
+        --enable-prompt-tokens-details
         --async-scheduling
         --enable-chunked-prefill
         --speculative-config "$${SPECULATIVE_CONFIG}"
