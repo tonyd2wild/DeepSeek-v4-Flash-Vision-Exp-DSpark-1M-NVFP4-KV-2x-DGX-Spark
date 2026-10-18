@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: safetensors-e8m0
+Version: 0.1
+Summary: Map the F8_E8M0 dtype string for safetensors' eager loader (64k-page kernel)

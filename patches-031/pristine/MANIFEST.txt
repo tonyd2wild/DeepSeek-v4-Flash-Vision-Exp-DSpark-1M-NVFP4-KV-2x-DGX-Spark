@@ -1,0 +1,12 @@
+# patches-031/pristine/ -- the vLLM v0.31.0 source Patch 5 on 0.31 derives FROM
+# (diff it against ../detokenizer.py). The dspark031 plugin needs no copy: each
+# patch stands aside if the method it wraps is missing, LOAD-1 also if upstream's
+# exact sort line is gone, and upstream-tests/ pin the behaviour they rely on.
+#
+# Fetched from the upstream tag (github.com/vllm-project/vllm, v0.31.0), which is
+# what vllm/vllm-openai:v0.31.0 ships. Re-diff if the image changes.
+source=github:vllm-project/vllm@v0.31.0
+captured=2026-10-16
+#
+# sha256  lines  path
+27bf6ae418754de91228d798405058b66d1484f793fd45f9d69396dfca5e9fa4  360  vllm/v1/engine/detokenizer.py

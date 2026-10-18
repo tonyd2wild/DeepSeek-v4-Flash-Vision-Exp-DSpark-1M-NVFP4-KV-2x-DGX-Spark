@@ -85,7 +85,7 @@ nothing a PR or issue links to changes path — `vision-exp/ds4-vision-tp2.sh` s
 - Any `MAX_MODEL_LEN=1500000` guidance, including the KV/context figures still carried in
   `vision-exp/README.md`'s "Measured" table. Standard is **1,048,576**.
 
-**Two things stay put and are NOT archive candidates:**
+**Three things stay put and are NOT archive candidates:**
 
 1. **The text-lane 0731 compose recipe** — `DEFAULT-CONFIG.md`, `docker-compose.dspark.yml`,
    `.env.dspark.example`, and the root `*-deepseek-v4-flash-dspark.sh` / `validate-dspark-config.sh`
@@ -93,9 +93,13 @@ nothing a PR or issue links to changes path — `vision-exp/ds4-vision-tp2.sh` s
    stays exactly where it is unless the archive commit says otherwise. It is not the vision recipe:
    if you are serving the vision build, use the launchers above.
 2. **`sparkrun/`** — the self-contained sparkrun recipes for both checkpoints, and **`parity/`**.
+3. **The vLLM 0.31 lane** — [`launchers/ds4-vision-tp2-vllm031.sh`](launchers/ds4-vision-tp2-vllm031.sh)
+   on stock `vllm/vllm-openai:v0.31.0`, documented in `docs/vllm-0.31-lane.md`. An **alternative**
+   to the TP2 launcher above, not a replacement: the recipe above is unchanged.
 
 The self-contained `sparkrun/` recipe serves under the id `deepseek-v4-flash-vision-exp`; the launchers here serve `deepseek-v4-flash-dspark`. Clients pointed at :8888 use the launcher's id.
 
 <!-- launcher hashes, maintained by tools/check-current.sh --write -->
+sha256 f4c040f6b526ac55f8f304997797528607dfc6c568a1badb87817b08757c5e85  launchers/ds4-vision-tp2-vllm031.sh
 sha256 310e74b5a459f3cab876cd4d5edcbe67416ed74e408dfd965fd592a0bd0b1409  launchers/ds4-vision-tp2.sh
 sha256 3ace8ad8172c5a9c146e7dacc385b16d1e60049f65b7697527ec14eeead35ea4  launchers/ds4-vision-tp4.sh

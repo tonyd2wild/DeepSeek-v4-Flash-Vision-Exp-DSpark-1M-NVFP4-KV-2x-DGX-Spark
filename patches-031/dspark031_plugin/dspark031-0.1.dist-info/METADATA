@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: dspark031
+Version: 0.1
+Summary: DSpark recipe runtime patches for vLLM 0.31 (KV-7 dedupe, MNT-10)

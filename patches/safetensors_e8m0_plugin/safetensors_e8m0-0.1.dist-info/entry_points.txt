@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+safetensors_e8m0 = safetensors_e8m0:register

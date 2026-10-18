@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+dspark031 = dspark031:register
